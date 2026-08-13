@@ -35,6 +35,14 @@ class OutageType(str, enum.Enum):
     UNPLANNED = "UNPLANNED"
 
 
+class DisasterType(str, enum.Enum):
+    POWER_OUTAGE = "POWER_OUTAGE"
+    TYPHOON = "TYPHOON"
+    EARTHQUAKE = "EARTHQUAKE"
+    COLD_WAVE = "COLD_WAVE"
+    FIRE = "FIRE"
+
+
 class OutageStatus(str, enum.Enum):
     SCHEDULED = "SCHEDULED"
     ACTIVE = "ACTIVE"
@@ -255,6 +263,10 @@ class OutageEvent(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     outage_type: Mapped[OutageType] = mapped_column(Enum(OutageType), nullable=False)
+    disaster_type: Mapped[DisasterType] = mapped_column(Enum(DisasterType), nullable=False, default=DisasterType.POWER_OUTAGE)
+    severity: Mapped[str | None] = mapped_column(String(20))
+    official_guidance_codes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    source_document_sha256: Mapped[str | None] = mapped_column(String(64), unique=True)
     mode: Mapped[OperationMode] = mapped_column(Enum(OperationMode), nullable=False)
     status: Mapped[OutageStatus] = mapped_column(Enum(OutageStatus), nullable=False)
     region_codes: Mapped[list[str]] = mapped_column(JSON, nullable=False)

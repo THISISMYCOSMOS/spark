@@ -1,23 +1,34 @@
-import { ImpactCaseStatus, OutageStatus, PatientResponse } from "../contracts.js";
+import { DeliveryStatus, ImpactCaseStatus, OutageStatus, PatientResponse } from "../contracts.js";
+import { JobType } from "../jobs/queue.js";
+import { buildNotificationDeduplicationKey } from "../notifications/service.js";
+import { NotificationType, renderTemplate } from "../notifications/templates.js";
+import { selectEscalationTarget } from "./escalation.js";
 import { createImpactCases } from "./matching.js";
 import { DEMO_ONLY_RISK_POLICY, evaluateRisk } from "./risk.js";
 import { calculateSafetyTime } from "./safety-time.js";
 import { createStatusCheck, isStatusCheckDue, respondToStatusCheck, timeoutStatusCheck } from "./status-check.js";
-import { selectEscalationTarget } from "./escalation.js";
-import { JobType } from "../jobs/queue.js";
-import { NotificationType, renderTemplate } from "../notifications/templates.js";
 
 const STATUS_CHECK_PURPOSE = Object.freeze({
   OUTAGE_STATUS: "OUTAGE_STATUS",
   RECOVERY_CONFIRMATION: "RECOVERY_CONFIRMATION",
 });
 
-/**
- * Orchestrates workflow decisions: which StatusCheck/notification/job to
- * create next. It mutates the plain ImpactCase/StatusCheck objects it is
- * handed and returns them — Backend 1 is responsible for persisting whatever
- * it gets back. Nothing here is a database.
- */
+function deliveryAccepted(result) {
+  return result?.delivery?.status === DeliveryStatus.ACCEPTED;
+}
+
+function deliveryFailure(result, fallbackErrorCode = "NOTIFICATION_FAILED") {
+  const delivery = result?.delivery ?? null;
+  return {
+    ok: false,
+    delivery,
+    errorCode: delivery?.errorCode ?? fallbackErrorCode,
+    retryable: Boolean(delivery?.retryable),
+  };
+}
+
+/** Orchestrates decisions only. Backend 1 persists returned snapshots and
+ * commands; Backend 2 never writes a production database. */
 export class OutageWorkflow {
   constructor({
     notificationService,
@@ -25,48 +36,74 @@ export class OutageWorkflow {
     jobQueue,
     riskPolicy = DEMO_ONLY_RISK_POLICY,
     templateRenderer = renderTemplate,
+    messageComposer = null,
+    responsePlanComposer = null,
   }) {
     this.notificationService = notificationService;
     this.responseLinkIssuer = responseLinkIssuer;
     this.jobQueue = jobQueue;
     this.riskPolicy = riskPolicy;
     this.templateRenderer = templateRenderer;
+    this.messageComposer = messageComposer;
+    this.responsePlanComposer = responsePlanComposer;
   }
 
-  /** Creates ImpactCases for a newly registered/started outage and, for an
-   * already-ACTIVE (unplanned or started) outage, sends the initial patient
-   * status check. A SCHEDULED outage only gets a prepare notice to the patient. */
   async start({ outage, patients, existingCases = [], now = new Date() }) {
-    const result = createImpactCases({ outage, patients, existingCases, now, riskPolicy: this.riskPolicy });
+    const result = this.prepare({ outage, patients, existingCases, now });
+    const execution = await this.executePrepared({ outage, patients, impactCases: result.created, now });
+    return { ...result, ...execution };
+  }
+
+  prepare({ outage, patients, existingCases = [], now = new Date() }) {
+    return createImpactCases({ outage, patients, existingCases, now, riskPolicy: this.riskPolicy });
+  }
+
+  async executePrepared({ outage, patients, impactCases, now = new Date() }) {
+    if (!Array.isArray(impactCases)) throw new TypeError("impactCases must be an array");
     const statusChecks = [];
-    for (const impactCase of result.created) {
+    const notificationFailures = [];
+    const responsePlans = [];
+
+    for (const impactCase of impactCases) {
       const patient = patients.find((item) => item.id === impactCase.patientId);
+      if (outage.status === OutageStatus.ACTIVE && this.responsePlanComposer) {
+        const responsePlan = await this.responsePlanComposer.compose({ patient, outage, impactCase });
+        impactCase.responsePlanActionCodes = responsePlan.actions.map((action) => action.code);
+        responsePlans.push({ impactCaseId: impactCase.id, ...responsePlan });
+      }
       if (outage.status === OutageStatus.SCHEDULED) {
-        await this.#send({
+        const sent = await this.#send({
           outage,
           impactCase,
+          patient,
           recipientType: "PATIENT",
           recipientId: patient.id,
           to: patient.phone,
           templateType: NotificationType.PLANNED_OUTAGE_PREPARE,
           variables: { patientName: patient.name, startsAt: outage.scheduledStartAt },
           escalationRound: 0,
+          now,
         });
+        if (!deliveryAccepted(sent)) notificationFailures.push({ impactCaseId: impactCase.id, ...deliveryFailure(sent) });
         continue;
       }
-      const statusCheck = await this.#beginStatusCheck({
+
+      // An active case is not WAITING_PATIENT until the provider accepts the
+      // status-check message and its response token is activated.
+      impactCase.status = ImpactCaseStatus.PREPARE;
+      const begun = await this.#beginStatusCheck({
         outage,
         impactCase,
         patient,
         purpose: STATUS_CHECK_PURPOSE.OUTAGE_STATUS,
         now,
       });
-      statusChecks.push(statusCheck);
+      if (begun.ok) statusChecks.push(begun.statusCheck);
+      else notificationFailures.push({ impactCaseId: impactCase.id, ...begun });
     }
-    return { ...result, statusChecks };
+    return { statusChecks, notificationFailures, responsePlans };
   }
 
-  /** Patient answered NORMAL / EQUIPMENT_ISSUE / NEED_HELP before the timeout. */
   async applyPatientResponse({ impactCase, statusCheck, patient, outage, response, now = new Date() }) {
     if (!Object.values(PatientResponse).includes(response)) {
       throw new TypeError("Invalid PatientResponse");
@@ -88,13 +125,10 @@ export class OutageWorkflow {
       return { impactCase, statusCheck: respondedCheck };
     }
     impactCase.status = ImpactCaseStatus.ACTION_REQUIRED;
-    await this.#escalateGuardian({ outage, impactCase, patient, now });
-    return { impactCase, statusCheck: respondedCheck };
+    const escalation = await this.#escalateGuardian({ outage, impactCase, patient, now });
+    return { impactCase, statusCheck: respondedCheck, escalation };
   }
 
-  /** No patient response by the deadline. Notifies the first contact only.
-   * Refuses to time out and escalate before statusCheck.timeoutAt — a job
-   * firing early (or being retried early) must not jump the deadline. */
   async handleStatusCheckTimeout({ impactCase, statusCheck, patient, outage, now = new Date() }) {
     if (!isStatusCheckDue(statusCheck, now)) {
       return { impactCase, statusCheck, skipped: true, reason: "STATUS_CHECK_NOT_DUE" };
@@ -111,63 +145,58 @@ export class OutageWorkflow {
     impactCase.status = ImpactCaseStatus.ACTION_REQUIRED;
     impactCase.updatedAt = new Date(now).toISOString();
 
-    await this.#escalateGuardian({ outage, impactCase, patient, now });
-    return { impactCase, statusCheck: timedOutCheck };
+    const escalation = await this.#escalateGuardian({ outage, impactCase, patient, now });
+    return { impactCase, statusCheck: timedOutCheck, escalation };
   }
 
-  /** Backend 1 calls this once a guardian is persisted as UNAVAILABLE, to learn
-   * who to contact next. Advances exactly one guardian per round; once every
-   * contact has been tried, notifies the institution instead of broadcasting. */
   async escalateToNextGuardian({ outage, impactCase, patient, now = new Date() }) {
     return this.#escalateGuardian({ outage, impactCase, patient, now });
   }
 
-  /** Regional recovery: ask the patient first. Never touches riskLevel — prior
-   * risk is preserved (v0.1 #4); only workflow status changes. */
   async reportRecovery({ outage, impactCases, patients, now = new Date() }) {
     const statusChecks = [];
+    const notificationFailures = [];
     for (const impactCase of impactCases) {
       const patient = patients.find((item) => item.id === impactCase.patientId);
       impactCase.recoveryEscalationRound = 0;
-      const statusCheck = await this.#beginStatusCheck({
+      const begun = await this.#beginStatusCheck({
         outage,
         impactCase,
         patient,
         purpose: STATUS_CHECK_PURPOSE.RECOVERY_CONFIRMATION,
         now,
       });
-      statusChecks.push(statusCheck);
+      if (begun.ok) statusChecks.push(begun.statusCheck);
+      else notificationFailures.push({ impactCaseId: impactCase.id, ...begun });
     }
-    return { impactCases, statusChecks };
+    return { impactCases, statusChecks, notificationFailures };
   }
 
-  /** Recovery status check timed out or came back unconfirmed. Guardian is
-   * only contacted at this point — never before recovery timeout/unconfirmed
-   * result. Risk is never modified here. */
   async handleRecoveryTimeoutOrUnconfirmed({ impactCase, patient, now = new Date() }) {
     const target = selectEscalationTarget({
       contacts: patient.emergencyContacts ?? [],
       escalationRound: impactCase.recoveryEscalationRound,
     });
-    impactCase.recoveryEscalationRound = target.nextEscalationRound;
-    impactCase.updatedAt = new Date(now).toISOString();
 
     if (target.exhausted) {
       const institutionPhone = this.#institutionPhone(patient);
       if (!institutionPhone) {
         return { impactCase, notified: "NONE", error: "NO_RECIPIENT_AVAILABLE" };
       }
-      await this.#send({
+      const sent = await this.#send({
         outage: { id: impactCase.outageId, mode: impactCase.mode },
         impactCase,
+        patient,
         recipientType: "INSTITUTION",
         recipientId: "INSTITUTION",
         to: institutionPhone,
         templateType: NotificationType.RECOVERY_CONFIRMATION,
         variables: { patientName: patient.name, responseUrl: "" },
         escalationRound: target.nextEscalationRound,
+        now,
       });
-      return { impactCase, notified: "INSTITUTION" };
+      if (!deliveryAccepted(sent)) return { impactCase, notified: "NONE", ...deliveryFailure(sent) };
+      return { impactCase, notified: "INSTITUTION", delivery: sent.delivery };
     }
 
     const issued = await this.responseLinkIssuer.issueLink({
@@ -176,47 +205,96 @@ export class OutageWorkflow {
       now,
       expiresAt: new Date(new Date(now).getTime() + this.riskPolicy.responseTimeoutSeconds * 1000).toISOString(),
     });
-    await this.#send({
+    const sent = await this.#send({
       outage: { id: impactCase.outageId, mode: impactCase.mode },
       impactCase,
+      patient,
       recipientType: "GUARDIAN",
       recipientId: target.contact.id ?? target.contact.phone,
       to: target.contact.phone,
       templateType: NotificationType.RECOVERY_CONFIRMATION,
       variables: { patientName: patient.name, responseUrl: issued.url },
       escalationRound: target.nextEscalationRound - 1,
+      now,
     });
-    return { impactCase, notified: "GUARDIAN", contact: target.contact };
+    if (!deliveryAccepted(sent)) return { impactCase, notified: "NONE", ...deliveryFailure(sent) };
+
+    impactCase.recoveryEscalationRound = target.nextEscalationRound;
+    impactCase.updatedAt = new Date(now).toISOString();
+    return { impactCase, notified: "GUARDIAN", contact: target.contact, delivery: sent.delivery };
   }
 
   async #beginStatusCheck({ outage, impactCase, patient, purpose, now }) {
-    const timeoutSeconds = this.riskPolicy.responseTimeoutSeconds;
-    const statusCheck = createStatusCheck({ impactCaseId: impactCase.id, purpose, now, timeoutSeconds });
-    const issued = await this.responseLinkIssuer.issueLink({
-      impactCaseId: impactCase.id,
-      purpose,
-      now,
-      expiresAt: statusCheck.timeoutAt,
-    });
     const templateType =
       purpose === STATUS_CHECK_PURPOSE.OUTAGE_STATUS
         ? NotificationType.OUTAGE_STATUS_CHECK
         : NotificationType.RECOVERY_CONFIRMATION;
+    const deduplicationKey = buildNotificationDeduplicationKey({
+      impactCaseId: impactCase.id,
+      templateType,
+      recipientId: patient.id,
+      to: patient.phone,
+      escalationRound: 0,
+    });
+    const reserved = await this.#reserveLink({
+      impactCaseId: impactCase.id,
+      purpose,
+      now,
+      idempotencyKey: deduplicationKey,
+    });
+    if (!reserved?.ok) {
+      return {
+        ok: false,
+        delivery: null,
+        errorCode: reserved?.errorCode ?? "TOKEN_RESERVATION_FAILED",
+        retryable: Boolean(reserved?.retryable),
+      };
+    }
 
-    await this.#send({
+    const sent = await this.#send({
       outage,
       impactCase,
+      patient,
       recipientType: "PATIENT",
       recipientId: patient.id,
       to: patient.phone,
       templateType,
-      variables: { patientName: patient.name, responseUrl: issued.url },
+      variables: { patientName: patient.name, responseUrl: reserved.data.url },
       escalationRound: 0,
+      responseTokenReservationId: reserved.data.reservationId,
+      now,
     });
+    if (!deliveryAccepted(sent)) return deliveryFailure(sent);
 
+    const acceptedAt = sent.delivery.providerAcceptedAt;
+    if (!acceptedAt) return deliveryFailure(sent, "PROVIDER_ACCEPTED_AT_MISSING");
+    const timeoutAt = new Date(
+      new Date(acceptedAt).getTime() + this.riskPolicy.responseTimeoutSeconds * 1000,
+    ).toISOString();
+    const activated = await this.#activateLink({
+      reservationId: reserved.data.reservationId,
+      activatedAt: acceptedAt,
+      expiresAt: timeoutAt,
+    });
+    if (!activated?.ok) {
+      return {
+        ok: false,
+        delivery: sent.delivery,
+        errorCode: activated?.errorCode ?? "TOKEN_ACTIVATION_FAILED",
+        retryable: Boolean(activated?.retryable),
+      };
+    }
+
+    const statusCheck = createStatusCheck({
+      impactCaseId: impactCase.id,
+      purpose,
+      now: acceptedAt,
+      timeoutSeconds: this.riskPolicy.responseTimeoutSeconds,
+      ...(activated.data?.statusCheckId ? { idFactory: () => activated.data.statusCheckId } : {}),
+    });
     impactCase.status =
       purpose === STATUS_CHECK_PURPOSE.OUTAGE_STATUS ? ImpactCaseStatus.WAITING_PATIENT : ImpactCaseStatus.RECOVERY_CHECK;
-    impactCase.updatedAt = new Date(now).toISOString();
+    impactCase.updatedAt = acceptedAt;
 
     this.jobQueue.schedule({
       type: purpose === STATUS_CHECK_PURPOSE.OUTAGE_STATUS ? JobType.STATUS_CHECK_TIMEOUT : JobType.RECOVERY_TIMEOUT,
@@ -225,19 +303,26 @@ export class OutageWorkflow {
       idempotencyKey: `${purpose}:${statusCheck.id}`,
     });
 
-    return statusCheck;
+    return { ok: true, statusCheck, delivery: sent.delivery };
   }
 
-  /** Notifies exactly one guardian for the current escalationRound. When every
-   * contact has been tried, notifies the institution instead. When risk is
-   * CRITICAL, the institution is also notified alongside the current guardian
-   * — never all guardians at once. */
+  async #reserveLink(input) {
+    const method = this.responseLinkIssuer?.reserveLink ?? this.responseLinkIssuer?.reserveResponseToken;
+    if (typeof method !== "function") return { ok: false, errorCode: "TOKEN_RESERVATION_PORT_MISSING", retryable: false };
+    return method.call(this.responseLinkIssuer, input);
+  }
+
+  async #activateLink(input) {
+    const method = this.responseLinkIssuer?.activateLink ?? this.responseLinkIssuer?.activateResponseToken;
+    if (typeof method !== "function") return { ok: false, errorCode: "TOKEN_ACTIVATION_PORT_MISSING", retryable: false };
+    return method.call(this.responseLinkIssuer, input);
+  }
+
   async #escalateGuardian({ outage, impactCase, patient, now }) {
     const target = selectEscalationTarget({
       contacts: patient.emergencyContacts ?? [],
       escalationRound: impactCase.escalationRound,
     });
-    impactCase.escalationRound = target.nextEscalationRound;
 
     if (target.exhausted) {
       const risk = evaluateRisk({ safetyTime: impactCase.safetyTime, allGuardiansUnavailable: true, policy: this.riskPolicy });
@@ -246,46 +331,61 @@ export class OutageWorkflow {
       impactCase.policyId = risk.policyId;
       impactCase.policyVersion = risk.policyVersion;
       impactCase.updatedAt = new Date(now).toISOString();
-      const institutionResult = await this.#notifyInstitution({ outage, impactCase, patient, escalationRound: target.nextEscalationRound });
+      const institutionResult = await this.#notifyInstitution({ outage, impactCase, patient, escalationRound: target.nextEscalationRound, now });
       if (!institutionResult.sent) {
-        return { impactCase, notified: "NONE", error: "NO_RECIPIENT_AVAILABLE" };
+        return {
+          impactCase,
+          notified: "NONE",
+          error: institutionResult.error ?? "NO_RECIPIENT_AVAILABLE",
+          errorCode: institutionResult.errorCode,
+          retryable: institutionResult.retryable,
+        };
       }
-      return { impactCase, notified: "INSTITUTION" };
+      return { impactCase, notified: "INSTITUTION", delivery: institutionResult.delivery };
     }
 
     const templateType =
       impactCase.riskLevel === "CRITICAL" ? NotificationType.CRITICAL_ALERT : NotificationType.GUARDIAN_ACTION_REQUIRED;
-    await this.#send({
+    const sent = await this.#send({
       outage,
       impactCase,
+      patient,
       recipientType: "GUARDIAN",
       recipientId: target.contact.id ?? target.contact.phone,
       to: target.contact.phone,
       templateType,
       variables: { patientName: patient.name, reason: impactCase.riskReason },
       escalationRound: target.nextEscalationRound - 1,
+      now,
     });
+    if (!deliveryAccepted(sent)) return { impactCase, notified: "NONE", ...deliveryFailure(sent) };
 
+    impactCase.escalationRound = target.nextEscalationRound;
+    impactCase.updatedAt = new Date(now).toISOString();
+    let institutionResult = null;
     if (impactCase.riskLevel === "CRITICAL") {
-      await this.#notifyInstitution({ outage, impactCase, patient, escalationRound: target.nextEscalationRound - 1 });
+      institutionResult = await this.#notifyInstitution({ outage, impactCase, patient, escalationRound: target.nextEscalationRound - 1, now });
     }
-    return { impactCase, notified: "GUARDIAN", contact: target.contact };
+    return { impactCase, notified: "GUARDIAN", contact: target.contact, delivery: sent.delivery, institutionResult };
   }
 
-  async #notifyInstitution({ outage, impactCase, patient, escalationRound }) {
+  async #notifyInstitution({ outage, impactCase, patient, escalationRound, now }) {
     const to = this.#institutionPhone(patient);
-    if (!to) return { sent: false };
-    await this.#send({
+    if (!to) return { sent: false, error: "NO_RECIPIENT_AVAILABLE" };
+    const result = await this.#send({
       outage,
       impactCase,
+      patient,
       recipientType: "INSTITUTION",
       recipientId: "INSTITUTION",
       to,
       templateType: NotificationType.CRITICAL_ALERT,
       variables: { patientName: patient.name, reason: impactCase.riskReason },
       escalationRound,
+      now,
     });
-    return { sent: true };
+    if (!deliveryAccepted(result)) return { sent: false, ...deliveryFailure(result) };
+    return { sent: true, delivery: result.delivery };
   }
 
   #institutionPhone(patient) {
@@ -304,7 +404,37 @@ export class OutageWorkflow {
     });
   }
 
-  async #send({ outage, impactCase, recipientType, recipientId, to, templateType, variables, escalationRound }) {
+  async #send({
+    outage,
+    impactCase,
+    patient,
+    recipientType,
+    recipientId,
+    to,
+    templateType,
+    variables,
+    escalationRound,
+    responseTokenReservationId = null,
+    now,
+  }) {
+    const fallbackText = this.templateRenderer(templateType, variables);
+    const content = this.messageComposer
+      ? await this.messageComposer.compose({
+          templateType,
+          recipientType,
+          patient,
+          outage,
+          impactCase,
+          variables,
+        })
+      : {
+          text: fallbackText,
+          source: "TEMPLATE",
+          policyVersion: null,
+          model: null,
+          requestId: null,
+          fallbackReason: null,
+        };
     return this.notificationService.send({
       mode: outage.mode,
       outageId: outage.id,
@@ -313,8 +443,11 @@ export class OutageWorkflow {
       recipientId,
       to,
       templateType,
-      text: this.templateRenderer(templateType, variables),
+      text: content.text,
       escalationRound,
+      responseTokenReservationId,
+      contentMetadata: content,
+      now,
     });
   }
 }

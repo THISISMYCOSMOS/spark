@@ -34,11 +34,14 @@ class OutageService:
         self.patients = PatientExistenceRepository(db)
         self.audits = AuditLogRepository(db)
 
-    def create(self, actor_id: str, body: OutageCreateRequest) -> dict:
+    def create(self, actor_id: str, body: OutageCreateRequest, actor_role: UserRole = UserRole.INSTITUTION_ADMIN) -> dict:
         now = datetime.now(timezone.utc)
         status = OutageStatus.SCHEDULED if body.outage_type == OutageType.SCHEDULED else OutageStatus.ACTIVE
         outage = OutageEvent(
-            title=body.title, outage_type=body.outage_type, mode=body.mode, status=status,
+            title=body.title, outage_type=body.outage_type, disaster_type=body.disaster_type,
+            severity=body.severity, official_guidance_codes=body.official_guidance_codes,
+            source_document_sha256=body.source_document_sha256,
+            mode=body.mode, status=status,
             region_codes=body.region_codes, scheduled_start_at=body.scheduled_start_at,
             expected_end_at=body.expected_end_at,
             started_at=(body.started_at or now) if status == OutageStatus.ACTIVE else None,
@@ -46,8 +49,8 @@ class OutageService:
         )
         self.outages.add(outage)
         self.db.flush()
-        self._history(outage, None, status, actor_id, UserRole.INSTITUTION_ADMIN, body.reason)
-        self._audit(outage, AuditAction.CREATED, actor_id, UserRole.INSTITUTION_ADMIN, body.reason, None, outage_view(outage))
+        self._history(outage, None, status, actor_id, actor_role, body.reason)
+        self._audit(outage, AuditAction.CREATED, actor_id, actor_role, body.reason, None, outage_view(outage))
         self._commit("OUTAGE_CREATE_CONFLICT", "정전 등록이 충돌했습니다.")
         return outage_view(outage)
 
@@ -97,8 +100,6 @@ class OutageService:
             raise ConflictError("DEMO_POLICY_NOT_ALLOWED_IN_LIVE", "DEMO_ONLY 위험 정책은 LIVE 정전에 사용할 수 없습니다.")
         if outage.status == OutageStatus.SCHEDULED and body.status != ImpactCaseStatus.PREPARE:
             raise ConflictError("INVALID_INITIAL_CASE_STATUS", "예고 정전의 최초 대응 상태는 PREPARE여야 합니다.")
-        if outage.status == OutageStatus.ACTIVE and body.status == ImpactCaseStatus.PREPARE:
-            raise ConflictError("INVALID_INITIAL_CASE_STATUS", "진행 중 정전의 최초 대응 상태는 PREPARE일 수 없습니다.")
         case = ImpactCase(outage_id=outage_id, **body.model_dump())
         self.cases.add(case)
         self.db.flush()

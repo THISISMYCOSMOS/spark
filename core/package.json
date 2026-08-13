@@ -1,9 +1,9 @@
 {
-  "name": "chic-backend-core",
+  "name": "chic-core",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "정전 대응 백엔드 2 코어 엔진, 시뮬레이션, 문자 모듈",
+  "description": "재난 PDF, 환자 컨텍스트, AI 대응방법 및 백엔드 연동 코어",
   "scripts": {
     "test": "node --test",
     "test:watch": "node --test --watch"
@@ -12,6 +12,6 @@
     "node": ">=20.16"
   },
   "dependencies": {
-    "solapi": "^6.0.1"
+    "pdfjs-dist": "5.4.149"
   }
 }

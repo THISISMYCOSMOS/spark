@@ -1,5 +1,50 @@
 import { randomUUID } from "node:crypto";
+
 import { DeliveryStatus, Mode, assertOneOf } from "../contracts.js";
+
+function iso(value = new Date()) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new TypeError("now must be a valid date");
+  return date.toISOString();
+}
+
+export function buildNotificationDeduplicationKey({
+  impactCaseId,
+  templateType,
+  recipientId,
+  to,
+  escalationRound = 0,
+}) {
+  return `${impactCaseId}:${templateType}:${recipientId ?? to}:${escalationRound}`;
+}
+
+function unexpectedProviderFailure(provider) {
+  return {
+    status: DeliveryStatus.FAILED,
+    provider: provider.kind,
+    providerMessageId: null,
+    errorCode: `${provider.kind}_UNEXPECTED_ERROR`,
+    retryable: false,
+    acceptedAt: null,
+  };
+}
+
+function validateProviderResult(result, provider) {
+  if (!result || ![DeliveryStatus.ACCEPTED, DeliveryStatus.FAILED].includes(result.status)) {
+    return unexpectedProviderFailure(provider);
+  }
+  if (result.status === DeliveryStatus.ACCEPTED && !result.acceptedAt) {
+    return unexpectedProviderFailure(provider);
+  }
+  return {
+    status: result.status,
+    provider: provider.kind,
+    providerMessageId: result.providerMessageId ?? null,
+    errorCode: result.status === DeliveryStatus.FAILED ? result.errorCode ?? `${provider.kind}_FAILED` : null,
+    retryable: result.status === DeliveryStatus.FAILED && Boolean(result.retryable),
+    acceptedAt: result.status === DeliveryStatus.ACCEPTED ? iso(result.acceptedAt) : null,
+  };
+}
 
 export class InMemoryNotificationStore {
   constructor() {
@@ -47,16 +92,17 @@ export class NotificationService {
     templateType,
     text,
     escalationRound = 0,
+    responseTokenReservationId = null,
+    contentMetadata = { source: "TEMPLATE" },
+    now = new Date(),
   }) {
     assertOneOf(mode, Mode, "mode");
-    // Identity: caseId + notificationType + recipientId + escalationRound (v0.1 #6).
-    // Callers cannot override this — it is the canonical dedup key, not a param.
-    const key = `${impactCaseId}:${templateType}:${recipientId ?? to}:${escalationRound}`;
+    const key = buildNotificationDeduplicationKey({ impactCaseId, templateType, recipientId, to, escalationRound });
     const existing = this.store.findByDedupeKey(key);
     if (existing) return { duplicate: true, delivery: existing };
 
     const provider = this.#providerFor(mode);
-
+    const timestamp = iso(now);
     const delivery = this.store.save({
       id: randomUUID(),
       mode,
@@ -69,24 +115,34 @@ export class NotificationService {
       text,
       escalationRound,
       deduplicationKey: key,
+      responseTokenReservationId,
+      contentSource: contentMetadata?.source ?? "TEMPLATE",
+      contentPolicyVersion: contentMetadata?.policyVersion ?? null,
+      contentModel: contentMetadata?.model ?? null,
+      contentRequestId: contentMetadata?.requestId ?? null,
+      contentFallbackReason: contentMetadata?.fallbackReason ?? null,
       provider: provider.kind,
       status: DeliveryStatus.PENDING,
+      providerMessageId: null,
+      providerAcceptedAt: null,
+      errorCode: null,
+      retryable: false,
       attempts: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
     });
-    await this.#attempt(delivery, provider);
+    await this.#attempt(delivery, provider, now);
     return { duplicate: false, delivery };
   }
 
-  async retryFailed(deliveryId) {
+  async retryFailed(deliveryId, { now = new Date() } = {}) {
     const delivery = this.store.get(deliveryId);
     if (!delivery) throw new Error("NOTIFICATION_NOT_FOUND");
     if (delivery.status !== DeliveryStatus.FAILED) return delivery;
-    if (delivery.attempts.length >= this.maxAttempts) return delivery;
+    if (!delivery.retryable || delivery.attempts.length >= this.maxAttempts) return delivery;
     // Re-validate TEST/LIVE provider identity on every retry, not just the initial send.
     const provider = this.#providerFor(delivery.mode);
-    await this.#attempt(delivery, provider);
+    await this.#attempt(delivery, provider, now);
     return delivery;
   }
 
@@ -98,20 +154,33 @@ export class NotificationService {
     return provider;
   }
 
-  async #attempt(delivery, provider) {
-    const attemptedAt = new Date().toISOString();
+  async #attempt(delivery, provider, now) {
+    const attemptedAt = iso(now);
+    let providerResult;
     try {
-      const result = await provider.send({ to: delivery.to, text: delivery.text });
-      delivery.attempts.push({ attemptedAt, ok: true, providerMessageId: result.providerMessageId });
-      delivery.providerMessageId = result.providerMessageId;
-      delivery.status = DeliveryStatus.SENT;
-      delivery.lastError = null;
-    } catch (error) {
-      delivery.attempts.push({ attemptedAt, ok: false, error: error.message });
-      delivery.status = DeliveryStatus.FAILED;
-      delivery.lastError = error.message;
+      providerResult = validateProviderResult(
+        await provider.send({ to: delivery.to, text: delivery.text }, { now }),
+        provider,
+      );
+    } catch {
+      providerResult = unexpectedProviderFailure(provider);
     }
-    delivery.updatedAt = new Date().toISOString();
+
+    delivery.attempts.push({
+      attemptedAt,
+      status: providerResult.status,
+      providerMessageId: providerResult.providerMessageId,
+      errorCode: providerResult.errorCode,
+      retryable: providerResult.retryable,
+      acceptedAt: providerResult.acceptedAt,
+    });
+    delivery.providerMessageId = providerResult.providerMessageId;
+    delivery.providerAcceptedAt = providerResult.acceptedAt;
+    delivery.status = providerResult.status;
+    delivery.errorCode = providerResult.errorCode;
+    delivery.retryable = providerResult.retryable;
+    delivery.lastError = providerResult.errorCode;
+    delivery.updatedAt = providerResult.acceptedAt ?? iso(now);
     this.store.save(delivery);
   }
 }

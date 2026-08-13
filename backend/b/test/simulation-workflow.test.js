@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  DeliveryStatus,
   ImpactCaseStatus,
   InMemoryJobQueue,
   MockSmsProvider,
@@ -192,4 +193,61 @@ test("지역 복구는 환자에게 먼저 확인을 요청하고 보호자는 �
   assert.equal(provider.messages.at(-1).to, patient.institutionContacts[0].phone);
   // Recovery escalation never touches riskLevel, from patient ask through institution handoff.
   assert.equal(impactCase.riskLevel, riskBeforeRecovery);
+});
+
+test("환자 문자 발송 실패 시 StatusCheck와 timeout job을 만들지 않는다", async () => {
+  const failingProvider = new MockSmsProvider({ failRecipients: [patient.phone] });
+  const { workflow, jobQueue } = buildWorkflow({ provider: failingProvider });
+  const outage = {
+    id: "outage-send-failure",
+    mode: Mode.TEST,
+    status: OutageStatus.ACTIVE,
+    regionCode: "11260",
+    startedAt: "2026-08-13T10:00:00.000Z",
+  };
+
+  const started = await workflow.start({ outage, patients: [patient], now: outage.startedAt });
+
+  assert.equal(started.statusChecks.length, 0);
+  assert.equal(started.notificationFailures.length, 1);
+  assert.equal(started.notificationFailures[0].retryable, true);
+  assert.equal(started.created[0].status, ImpactCaseStatus.PREPARE);
+  assert.equal(jobQueue.jobs.size, 0);
+});
+
+test("공급자 수락 시 providerAcceptedAt을 기준으로 StatusCheck와 timeout job을 생성한다", async () => {
+  const acceptedAt = "2026-08-13T10:00:05.000Z";
+  const provider = {
+    kind: "MOCK",
+    messages: [],
+    async send(message) {
+      this.messages.push(message);
+      return {
+        status: DeliveryStatus.ACCEPTED,
+        provider: "MOCK",
+        providerMessageId: "accepted-later",
+        errorCode: null,
+        retryable: false,
+        acceptedAt,
+      };
+    },
+  };
+  const { workflow, jobQueue } = buildWorkflow({ provider });
+  const outage = {
+    id: "outage-accepted-time",
+    mode: Mode.TEST,
+    status: OutageStatus.ACTIVE,
+    regionCode: "11260",
+    startedAt: "2026-08-13T10:00:00.000Z",
+  };
+
+  const started = await workflow.start({ outage, patients: [patient], now: outage.startedAt });
+  const statusCheck = started.statusChecks[0];
+  const job = [...jobQueue.jobs.values()][0];
+
+  assert.equal(started.notificationFailures.length, 0);
+  assert.equal(statusCheck.requestedAt, acceptedAt);
+  assert.equal(statusCheck.timeoutAt, "2026-08-13T10:00:15.000Z");
+  assert.equal(job.runAt, statusCheck.timeoutAt);
+  assert.equal(started.created[0].status, ImpactCaseStatus.WAITING_PATIENT);
 });

@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ..models import ImpactCaseStatus, OperationMode, OutageType, RiskLevel
+from ..models import DisasterType, ImpactCaseStatus, OperationMode, OutageType, RiskLevel
 
 
 def ensure_aware(value: datetime | None) -> datetime | None:
@@ -14,6 +14,10 @@ def ensure_aware(value: datetime | None) -> datetime | None:
 class OutageCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     outage_type: OutageType
+    disaster_type: DisasterType = DisasterType.POWER_OUTAGE
+    severity: str | None = Field(default=None, pattern=r"^(ADVISORY|WATCH|WARNING|SEVERE)$")
+    official_guidance_codes: list[str] = Field(default_factory=list, max_length=30)
+    source_document_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     mode: OperationMode
     region_codes: list[str] = Field(min_length=1, max_length=1000)
     scheduled_start_at: datetime | None = None
@@ -36,12 +40,33 @@ class OutageCreateRequest(BaseModel):
             raise ValueError("지역 코드를 올바르게 입력해야 합니다.")
         return list(dict.fromkeys(cleaned))
 
+    @field_validator("official_guidance_codes")
+    @classmethod
+    def guidance_codes(cls, values: list[str]):
+        if any(not value or len(value) > 64 or not value.replace("_", "").isalnum() for value in values):
+            raise ValueError("공식 행동 코드 형식이 올바르지 않습니다.")
+        return list(dict.fromkeys(values))
+
     @model_validator(mode="after")
     def type_times(self):
         if self.outage_type == OutageType.SCHEDULED and self.scheduled_start_at is None:
             raise ValueError("예고 정전은 예정 시작 시각이 필요합니다.")
         if self.outage_type == OutageType.UNPLANNED and self.scheduled_start_at is not None:
             raise ValueError("비예고 정전에는 예정 시작 시각을 입력할 수 없습니다.")
+        return self
+
+
+class CoreDisasterCreateRequest(OutageCreateRequest):
+    @model_validator(mode="after")
+    def mock_disaster_only(self):
+        if self.mode != OperationMode.TEST:
+            raise ValueError("목업 PDF 재난은 TEST 모드만 허용됩니다.")
+        if self.outage_type != OutageType.UNPLANNED:
+            raise ValueError("목업 PDF 재난은 비예고 사건이어야 합니다.")
+        if self.disaster_type == DisasterType.POWER_OUTAGE:
+            raise ValueError("목업 PDF에는 구체적인 재난 유형이 필요합니다.")
+        if self.source_document_sha256 is None:
+            raise ValueError("목업 PDF SHA-256이 필요합니다.")
         return self
 
 
