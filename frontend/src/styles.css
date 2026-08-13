@@ -1,0 +1,382 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design system definition.
+ *
+ * The @theme inline block maps CSS custom properties to Tailwind utility
+ * classes (e.g. --color-primary -> bg-primary, text-primary).
+ *
+ * The :root and .dark blocks define the actual color values using oklch.
+ * All colors MUST use oklch format.
+ *
+ * To add a new semantic color:
+ * 1. Add the variable to :root (light value) and .dark (dark value)
+ * 2. Register it in @theme inline as --color-<name>: var(--<name>)
+ */
+
+@theme inline {
+  --font-sans: "IBM Plex Sans KR", ui-sans-serif, system-ui, sans-serif;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-paper: var(--paper);
+  --color-wash: var(--wash);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-dim: var(--dim);
+  --color-crit: var(--crit);
+  --color-crit-bg: var(--crit-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-line: var(--warn-line);
+  --color-safe: var(--safe);
+  --color-safe-bg: var(--safe-bg);
+  --color-safe-line: var(--safe-line);
+  --color-lock-bg: var(--lock-bg);
+  --color-mon-ecg: var(--mon-ecg);
+  --color-mon-spo2: var(--mon-spo2);
+  --color-mon-grid: var(--mon-grid);
+  --color-shell: var(--shell);
+  --color-ink2: var(--ink2);
+  --color-mute: var(--mute);
+  --color-field-line: var(--field-line);
+  --color-empty: var(--empty);
+  --color-background: var(--background);
+
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+:root {
+  --radius: 0.625rem;
+
+  /* 프로토타입 팔레트 */
+  --paper: oklch(1 0 0); /* #FFFFFF */
+  --wash: oklch(0.9662 0.0079 247.9); /* #F2F5F9 */
+  --line: oklch(0.9014 0.0148 251.5); /* #DCE3EC */
+  --ink: oklch(0.1793 0.0184 253.6); /* #0B1017 */
+  --dim: oklch(0.5117 0.0261 251.9); /* #5A6878 */
+  --crit: oklch(0.4922 0.1932 28.3); /* #C0241A */
+  --crit-bg: oklch(0.9509 0.0169 28.3); /* #FCEAE8 */
+  --warn: oklch(0.4907 0.1122 66.5); /* #9A5B06 */
+  --warn-bg: oklch(0.9644 0.0286 84.3); /* #FBF1DF */
+  --warn-line: oklch(0.8869 0.0725 78.4); /* #F0D7AC */
+  --safe: oklch(0.4374 0.1055 159.3); /* #0C6D45 */
+  --safe-bg: oklch(0.9605 0.0208 159.3); /* #E7F4EE */
+  --safe-line: oklch(0.8768 0.0629 158.3); /* #B9E0CD */
+  --lock-bg: oklch(0.2107 0.0164 254.1); /* #131A22 */
+  --shell: #E6EBF2; /* 폰 프레임 배경 */
+
+  /* 보호자 화면 전용 색 */
+  --ink2: #26313E;
+  --mute: #7C8A99;
+  --field-line: #C3CEDB;
+  --empty: #E9EEF4;
+
+  /* 병원 환자 모니터 색 */
+  --mon-ecg: oklch(0.8459 0.2255 143.5); /* 심전도 초록 */
+  --mon-spo2: oklch(0.8471 0.1288 205.6); /* 산소포화도 하늘 */
+  --mon-grid: oklch(0.3 0.02 254.1); /* 모니터 격자 */
+
+  --background: var(--wash);
+  --foreground: var(--ink);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.129 0.042 264.695);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.129 0.042 264.695);
+  --primary: oklch(0.208 0.042 265.755);
+  --primary-foreground: oklch(0.984 0.003 247.858);
+  --secondary: oklch(0.968 0.007 247.896);
+  --secondary-foreground: oklch(0.208 0.042 265.755);
+  --muted: oklch(0.968 0.007 247.896);
+  --muted-foreground: oklch(0.554 0.046 257.417);
+  --accent: oklch(0.968 0.007 247.896);
+  --accent-foreground: oklch(0.208 0.042 265.755);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --border: oklch(0.929 0.013 255.508);
+  --input: oklch(0.929 0.013 255.508);
+  --ring: oklch(0.704 0.04 256.788);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.984 0.003 247.858);
+  --sidebar-foreground: oklch(0.129 0.042 264.695);
+  --sidebar-primary: oklch(0.208 0.042 265.755);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.968 0.007 247.896);
+  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
+  --sidebar-border: oklch(0.929 0.013 255.508);
+  --sidebar-ring: oklch(0.704 0.04 256.788);
+}
+
+.dark {
+  --background: oklch(0.129 0.042 264.695);
+  --foreground: oklch(0.984 0.003 247.858);
+  --card: oklch(0.208 0.042 265.755);
+  --card-foreground: oklch(0.984 0.003 247.858);
+  --popover: oklch(0.208 0.042 265.755);
+  --popover-foreground: oklch(0.984 0.003 247.858);
+  --primary: oklch(0.929 0.013 255.508);
+  --primary-foreground: oklch(0.208 0.042 265.755);
+  --secondary: oklch(0.279 0.041 260.031);
+  --secondary-foreground: oklch(0.984 0.003 247.858);
+  --muted: oklch(0.279 0.041 260.031);
+  --muted-foreground: oklch(0.704 0.04 256.788);
+  --accent: oklch(0.279 0.041 260.031);
+  --accent-foreground: oklch(0.984 0.003 247.858);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.551 0.027 264.364);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.208 0.042 265.755);
+  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.279 0.041 260.031);
+  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.551 0.027 264.364);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+  }
+
+  /* Accessible focus ring for all interactive controls */
+  button:focus-visible,
+  [role="button"]:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--ink);
+  }
+}
+
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.animate-pulse-live {
+  animation: pulse-live 1.6s ease-in-out infinite;
+}
+
+/* 화면이 바뀔 때 한 번만 주는 짧은 강조 효과 */
+@keyframes screen-flash {
+  0% {
+    opacity: 0.55;
+    transform: scale(0.99);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 심전도 파형이 왼쪽으로 흐르는 효과 */
+@keyframes ecg-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-ecg-scroll {
+  animation: ecg-scroll 4s linear infinite;
+}
+
+.animate-screen-flash {
+  animation: screen-flash 520ms ease-out 1;
+}
+
+
+/* 시스템에서 애니메이션 최소화를 켜면 깜빡임과 전환을 멈춥니다. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 보호자 화면 알림 띠 점 깜빡임 (1.7초 주기) */
+@keyframes guardian-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.animate-guardian-blink {
+  animation: guardian-blink 1.7s ease-in-out infinite;
+}
+
+/* 글씨 크기 역할 클래스 — 화면에서 px를 직접 쓰지 않습니다 */
+@utility t-display {
+  font-size: 56px;
+}
+@utility t-metric-2xl {
+  font-size: 52px;
+}
+@utility t-metric-xl {
+  font-size: 46px;
+}
+@utility t-metric-lg {
+  font-size: 44px;
+}
+@utility t-metric {
+  font-size: 38px;
+}
+@utility t-metric-md {
+  font-size: 36px;
+}
+@utility t-metric-sm {
+  font-size: 37px;
+}
+@utility t-heading-2xl {
+  font-size: 34px;
+}
+@utility t-heading-xl {
+  font-size: 32px;
+}
+@utility t-heading-lg {
+  font-size: 30px;
+}
+@utility t-heading {
+  font-size: 29px;
+}
+@utility t-heading-sm {
+  font-size: 28px;
+}
+@utility t-subheading-lg {
+  font-size: 27px;
+}
+@utility t-subheading {
+  font-size: 26px;
+}
+@utility t-subheading-sm {
+  font-size: 25px;
+}
+@utility t-title-lg {
+  font-size: 24px;
+}
+@utility t-title {
+  font-size: 23px;
+}
+@utility t-title-sm {
+  font-size: 21px;
+}
+@utility t-lead {
+  font-size: 20px;
+}
+@utility t-body-lg {
+  font-size: 19px;
+}
+@utility t-body {
+  font-size: 18px;
+}
+@utility t-body-sm {
+  font-size: 17px;
+}
+@utility t-copy {
+  font-size: 16px;
+}
+@utility t-action {
+  font-size: 15.5px;
+}
+@utility t-copy-sm {
+  font-size: 15px;
+}
+@utility t-input {
+  font-size: 14.5px;
+}
+@utility t-note {
+  font-size: 14px;
+}
+@utility t-note-sm {
+  font-size: 13.5px;
+}
+@utility t-caption {
+  font-size: 13px;
+}
+@utility t-caption-sm {
+  font-size: 12.5px;
+}
+@utility t-caption-xs {
+  font-size: 12px;
+}
+@utility t-micro {
+  font-size: 11.5px;
+}
+@utility t-micro-sm {
+  font-size: 11px;
+}
