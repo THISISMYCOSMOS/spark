@@ -1,0 +1,14 @@
+{
+  "name": "chic-backend-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "정전 대응 백엔드 2 코어 엔진, 시뮬레이션, 문자 모듈",
+  "scripts": {
+    "test": "node --test",
+    "test:watch": "node --test --watch"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
