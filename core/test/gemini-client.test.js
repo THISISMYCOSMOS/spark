@@ -55,7 +55,7 @@ test("세 Gemini 메서드는 공식 SDK generateContent 요청으로 역할별 
         modelVersion: "test-model-version",
         responseId: "patient-request-id",
       },
-      { text: "{{PATIENT_NAME}}님, 상태를 확인해 주세요. {{RESPONSE_URL}}", responseId: "message-request-id" },
+      { text: "등록된 상태를 확인해 주세요.", responseId: "message-request-id" },
       { text: "등록된 안전 항목을 차례로 확인하세요.", responseId: "plan-request-id" },
     ], captured),
   });
@@ -87,7 +87,7 @@ test("세 Gemini 메서드는 공식 SDK generateContent 요청으로 역할별 
     impactCase: { riskLevel: "HIGH", riskReason: "SAFETY_TIME_UNKNOWN" },
     variables: { patientName: "김비공개", responseUrl: "https://private.test/token" },
   });
-  await client.generateMessage(messageRequest);
+  const messageResult = await client.generateMessage(messageRequest);
 
   const responsePlanRequest = buildAiResponsePlanRequest({
     patient: { notificationContext: { medicalDeviceTypes: ["VENTILATOR"] } },
@@ -108,10 +108,18 @@ test("세 Gemini 메서드는 공식 SDK generateContent 요청으로 역할별 
   assert.equal(captured[0].model, model);
   assert.equal(captured[0].config.responseMimeType, "application/json");
   assert.equal(captured[0].config.responseJsonSchema.type, "object");
+  assert.deepEqual(
+    captured[0].config.responseJsonSchema.properties.mobilitySupportRequired.type,
+    ["boolean", "null"],
+  );
   assert.equal(captured[1].config.responseMimeType, "text/plain");
+  assert.match(messageResult.text, /\{\{PATIENT_NAME\}\}/);
+  assert.match(messageResult.text, /\{\{RESPONSE_URL\}\}/);
   for (const request of captured) {
     assert.equal(Object.hasOwn(request.config, "candidateCount"), false);
     assert.equal(Object.hasOwn(request.config, "temperature"), false);
+    assert.equal(request.config.thinkingConfig.thinkingLevel, "LOW");
+    assert.equal(request.config.maxOutputTokens, 1024);
   }
   assert.deepEqual(JSON.parse(captured[2].contents).allowedActions, [
     { code: "CHECK_DEVICE_POWER", instructionKo: "의료기기 전원을 확인하세요." },

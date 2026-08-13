@@ -25,6 +25,7 @@ function buildSystemInstruction(placeholders) {
     "patient.responsePlanActionCodes가 있으면 그 코드로 승인된 대응 범위만 안내하세요.",
     "확인되지 않은 시간, 수치, 연락처, URL, 안전 보장을 만들지 마세요.",
     "환자 이름과 응답 링크는 알 수 없으므로 지정된 placeholder를 그대로 넣으세요.",
+    "requiredPlaceholders 배열의 모든 문자열을 철자나 괄호를 바꾸지 말고 본문에 각각 정확히 한 번 포함하세요.",
     `필수 placeholder: ${placeholders.join(", ")}`,
     "한국어 평문 한 문단만 반환하세요. JSON, Markdown, 설명을 반환하지 마세요.",
   ].join(" ");

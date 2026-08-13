@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
 const PATIENT_FACT_KEYS = Object.freeze([
   "medicalDeviceTypes",
@@ -27,6 +27,8 @@ const DISASTER_FACT_KEYS = Object.freeze([
   "expectedEndAt",
   "officialGuidanceCodes",
 ]);
+
+const MESSAGE_PLACEHOLDERS = new Set(["{{PATIENT_NAME}}", "{{RESPONSE_URL}}", "{{STARTS_AT}}"]);
 
 export class GeminiConfigurationError extends Error {
   constructor(code) {
@@ -94,7 +96,9 @@ function messagePayload(request) {
       patient: patientFacts(request?.facts?.patient),
       disaster: disasterFacts(request?.facts?.disaster),
     },
-    requiredPlaceholders: Array.isArray(request?.requiredPlaceholders) ? request.requiredPlaceholders : [],
+    requiredPlaceholders: Array.isArray(request?.requiredPlaceholders)
+      ? request.requiredPlaceholders.filter((placeholder) => MESSAGE_PLACEHOLDERS.has(placeholder))
+      : [],
   };
 }
 
@@ -121,7 +125,7 @@ function patientContextSchema(allowed = {}) {
         items: { type: "string", enum: allowed.medicalDeviceTypes ?? [] },
       },
       powerDependencyLevel: { type: "string", enum: allowed.powerDependencyLevels ?? [] },
-      mobilitySupportRequired: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+      mobilitySupportRequired: { type: ["boolean", "null"] },
       communicationSupport: { type: "string", enum: allowed.communicationSupport ?? [] },
       approvedPrecautionCodes: {
         type: "array",
@@ -150,7 +154,7 @@ export class GeminiAiClient {
     const generated = await this.#generate({
       systemInstruction: request?.systemInstruction,
       payload,
-      maxOutputTokens: 512,
+      maxOutputTokens: 1024,
       responseJsonSchema: patientContextSchema(payload.allowed),
     });
     let context;
@@ -163,11 +167,23 @@ export class GeminiAiClient {
   }
 
   async generateMessage(request) {
-    return this.#generate({
+    const payload = messagePayload(request);
+    const generated = await this.#generate({
       systemInstruction: request?.systemInstruction,
-      payload: messagePayload(request),
-      maxOutputTokens: 512,
+      payload,
+      maxOutputTokens: 1024,
     });
+    let text = generated.text;
+    if (payload.requiredPlaceholders.includes("{{PATIENT_NAME}}") && !text.includes("{{PATIENT_NAME}}")) {
+      text = `{{PATIENT_NAME}}님, ${text}`;
+    }
+    if (payload.requiredPlaceholders.includes("{{STARTS_AT}}") && !text.includes("{{STARTS_AT}}")) {
+      text = `${text} 예정 시각: {{STARTS_AT}}`;
+    }
+    if (payload.requiredPlaceholders.includes("{{RESPONSE_URL}}") && !text.includes("{{RESPONSE_URL}}")) {
+      text = `${text} 응답: {{RESPONSE_URL}}`;
+    }
+    return { ...generated, text };
   }
 
   async generateResponsePlan(request) {
@@ -187,6 +203,7 @@ export class GeminiAiClient {
         config: {
           systemInstruction: typeof systemInstruction === "string" ? systemInstruction : "",
           maxOutputTokens,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           ...(responseJsonSchema
             ? { responseMimeType: "application/json", responseJsonSchema }
             : { responseMimeType: "text/plain" }),
