@@ -19,6 +19,7 @@ export class TestResponseLinkIssuer extends ResponseTokenPort {
     this.issuedCount = 0;
     this.byIdempotencyKey = new Map();
     this.reservations = new Map();
+    this.activations = [];
   }
 
   reserveLink({ impactCaseId, purpose, now = new Date(), idempotencyKey } = {}) {
@@ -61,6 +62,12 @@ export class TestResponseLinkIssuer extends ResponseTokenPort {
 
     reservation.activatedAt = activatedIso;
     reservation.expiresAt = expiresIso;
+    this.activations.push({
+      reservationId,
+      linkId: reservationId,
+      activatedAt: activatedIso,
+      expiresAt: expiresIso,
+    });
     return portSuccess(reservation);
   }
 

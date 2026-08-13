@@ -1,4 +1,4 @@
-import { DeliveryStatus, ImpactCaseStatus, OutageStatus, PatientResponse } from "../contracts.js";
+import { DeliveryStatus, ImpactCaseStatus, OutageStatus, PatientResponse, StatusCheckStatus } from "../contracts.js";
 import { JobType } from "../jobs/queue.js";
 import { buildNotificationDeduplicationKey } from "../notifications/service.js";
 import { NotificationType, renderTemplate } from "../notifications/templates.js";
@@ -61,6 +61,8 @@ export class OutageWorkflow {
   async executePrepared({ outage, patients, impactCases, now = new Date() }) {
     if (!Array.isArray(impactCases)) throw new TypeError("impactCases must be an array");
     const statusChecks = [];
+    const statusCheckResults = [];
+    const preparationResults = [];
     const notificationFailures = [];
     const responsePlans = [];
 
@@ -72,7 +74,7 @@ export class OutageWorkflow {
         responsePlans.push({ impactCaseId: impactCase.id, ...responsePlan });
       }
       if (outage.status === OutageStatus.SCHEDULED) {
-        const sent = await this.#send({
+        const patientNotice = await this.#send({
           outage,
           impactCase,
           patient,
@@ -84,7 +86,51 @@ export class OutageWorkflow {
           escalationRound: 0,
           now,
         });
-        if (!deliveryAccepted(sent)) notificationFailures.push({ impactCaseId: impactCase.id, ...deliveryFailure(sent) });
+        if (!deliveryAccepted(patientNotice)) {
+          notificationFailures.push({ impactCaseId: impactCase.id, ...deliveryFailure(patientNotice) });
+          preparationResults.push({
+            impactCaseId: impactCase.id,
+            patientNotified: false,
+            guardianNotified: false,
+            reason: "PATIENT_NOTIFICATION_FAILED",
+          });
+          continue;
+        }
+
+        const target = selectEscalationTarget({ contacts: patient.emergencyContacts ?? [], escalationRound: 0 });
+        if (target.exhausted) {
+          preparationResults.push({
+            impactCaseId: impactCase.id,
+            patientNotified: true,
+            guardianNotified: false,
+            reason: "NO_GUARDIAN_AVAILABLE",
+          });
+          continue;
+        }
+
+        const guardianNotice = await this.#send({
+          outage,
+          impactCase,
+          patient,
+          recipientType: "GUARDIAN",
+          recipientId: target.contact.id ?? target.contact.phone,
+          to: target.contact.phone,
+          templateType: NotificationType.PLANNED_OUTAGE_PREPARE,
+          variables: { patientName: patient.name, startsAt: outage.scheduledStartAt },
+          escalationRound: 0,
+          now,
+        });
+        if (!deliveryAccepted(guardianNotice)) {
+          notificationFailures.push({ impactCaseId: impactCase.id, ...deliveryFailure(guardianNotice) });
+        }
+        preparationResults.push({
+          impactCaseId: impactCase.id,
+          patientNotified: true,
+          guardianNotified: deliveryAccepted(guardianNotice),
+          ...(deliveryAccepted(guardianNotice)
+            ? { guardianId: target.contact.id ?? target.contact.phone }
+            : { reason: "GUARDIAN_NOTIFICATION_FAILED" }),
+        });
         continue;
       }
 
@@ -98,10 +144,11 @@ export class OutageWorkflow {
         purpose: STATUS_CHECK_PURPOSE.OUTAGE_STATUS,
         now,
       });
+      statusCheckResults.push(begun);
       if (begun.ok) statusChecks.push(begun.statusCheck);
       else notificationFailures.push({ impactCaseId: impactCase.id, ...begun });
     }
-    return { statusChecks, notificationFailures, responsePlans };
+    return { statusChecks, statusCheckResults, preparationResults, notificationFailures, responsePlans };
   }
 
   async applyPatientResponse({ impactCase, statusCheck, patient, outage, response, now = new Date() }) {
@@ -149,8 +196,26 @@ export class OutageWorkflow {
     return { impactCase, statusCheck: timedOutCheck, escalation };
   }
 
-  async escalateToNextGuardian({ outage, impactCase, patient, now = new Date() }) {
-    return this.#escalateGuardian({ outage, impactCase, patient, now });
+  async escalateToNextGuardian({
+    outage,
+    impactCase,
+    patient,
+    guardianAction = null,
+    guardianActionTimedOut = false,
+    now = new Date(),
+  }) {
+    if (impactCase.status === ImpactCaseStatus.CLOSED || guardianAction?.status === "COMPLETED") {
+      return { impactCase, notified: "NONE", skipped: true, reason: "GUARDIAN_ACTION_COMPLETED" };
+    }
+    if (guardianAction?.status !== "UNAVAILABLE" && guardianActionTimedOut !== true) {
+      return {
+        impactCase,
+        notified: "NONE",
+        skipped: true,
+        reason: guardianAction ? "GUARDIAN_ACTION_PENDING" : "GUARDIAN_EVIDENCE_REQUIRED",
+      };
+    }
+    return this.#escalateGuardian({ outage, impactCase, patient, now, preserveRisk: true });
   }
 
   async reportRecovery({ outage, impactCases, patients, now = new Date() }) {
@@ -172,11 +237,53 @@ export class OutageWorkflow {
     return { impactCases, statusChecks, notificationFailures };
   }
 
-  async handleRecoveryTimeoutOrUnconfirmed({ impactCase, patient, now = new Date() }) {
+  async startStatusCheckAfterSuccessfulRetry({ impactCase, statusCheckResult }) {
+    if (statusCheckResult?.started !== false || statusCheckResult?.status !== "STATUS_CHECK_NOT_STARTED") {
+      throw new Error("STATUS_CHECK_RETRY_CONTEXT_REQUIRED");
+    }
+    if (statusCheckResult.delivery?.status !== DeliveryStatus.ACCEPTED || !statusCheckResult.delivery.providerAcceptedAt) {
+      return { ...statusCheckResult, status: "STATUS_CHECK_NOT_STARTED", reason: "NOTIFICATION_NOT_ACCEPTED" };
+    }
+    return this.#activateStatusCheck({
+      impactCase,
+      purpose: statusCheckResult.purpose,
+      link: statusCheckResult.link,
+      delivery: statusCheckResult.delivery,
+    });
+  }
+
+  async handleRecoveryTimeoutOrUnconfirmed({
+    impactCase,
+    patient,
+    statusCheck = null,
+    recoveryConfirmation = null,
+    now = new Date(),
+  }) {
+    if (impactCase.status === ImpactCaseStatus.CLOSED || recoveryConfirmation?.completed === true) {
+      return { impactCase, notified: "NONE", skipped: true, reason: "RECOVERY_ALREADY_COMPLETED" };
+    }
+    if (statusCheck?.status === StatusCheckStatus.PENDING) {
+      return { impactCase, notified: "NONE", skipped: true, reason: "RECOVERY_CHECK_PENDING" };
+    }
+
+    const homePowerRestored = recoveryConfirmation?.homePowerRestored;
+    const deviceOperatingNormally = recoveryConfirmation?.deviceOperatingNormally;
+    if (homePowerRestored === true && deviceOperatingNormally === true) {
+      return { impactCase, notified: "NONE", skipped: true, reason: "RECOVERY_CONFIRMED" };
+    }
+
+    const timedOut = statusCheck?.status === StatusCheckStatus.TIMED_OUT;
+    const explicitlyUnrestored = homePowerRestored === false || deviceOperatingNormally === false;
+    if (!timedOut && !explicitlyUnrestored) {
+      return { impactCase, notified: "NONE", skipped: true, reason: "RECOVERY_EVIDENCE_REQUIRED" };
+    }
+
     const target = selectEscalationTarget({
       contacts: patient.emergencyContacts ?? [],
       escalationRound: impactCase.recoveryEscalationRound,
     });
+    impactCase.recoveryEscalationRound = target.nextEscalationRound;
+    impactCase.updatedAt = new Date(now).toISOString();
 
     if (target.exhausted) {
       const institutionPhone = this.#institutionPhone(patient);
@@ -225,8 +332,6 @@ export class OutageWorkflow {
     });
     if (!deliveryAccepted(sent)) return { impactCase, notified: "NONE", ...deliveryFailure(sent) };
 
-    impactCase.recoveryEscalationRound = target.nextEscalationRound;
-    impactCase.updatedAt = new Date(now).toISOString();
     return { impactCase, notified: "GUARDIAN", contact: target.contact, delivery: sent.delivery };
   }
 
@@ -270,22 +375,47 @@ export class OutageWorkflow {
       responseTokenReservationId: reserved.data.reservationId,
       now,
     });
-    if (!deliveryAccepted(sent)) return deliveryFailure(sent);
+    const link = reserved.data;
+    if (!deliveryAccepted(sent)) {
+      delete sent.delivery.providerAcceptedAt;
+      return {
+        ...deliveryFailure(sent),
+        started: false,
+        status: "STATUS_CHECK_NOT_STARTED",
+        reason: "NOTIFICATION_FAILED",
+        purpose,
+        link,
+      };
+    }
 
-    const acceptedAt = sent.delivery.providerAcceptedAt;
-    if (!acceptedAt) return deliveryFailure(sent, "PROVIDER_ACCEPTED_AT_MISSING");
+    return this.#activateStatusCheck({ impactCase, purpose, link, delivery: sent.delivery });
+  }
+
+  async #activateStatusCheck({ impactCase, purpose, link, delivery }) {
+    const acceptedAt = delivery.providerAcceptedAt;
+    if (!acceptedAt) {
+      return {
+        ok: false,
+        started: false,
+        status: "STATUS_CHECK_NOT_STARTED",
+        reason: "PROVIDER_ACCEPTED_AT_MISSING",
+        purpose,
+        link,
+        delivery,
+      };
+    }
     const timeoutAt = new Date(
       new Date(acceptedAt).getTime() + this.riskPolicy.responseTimeoutSeconds * 1000,
     ).toISOString();
     const activated = await this.#activateLink({
-      reservationId: reserved.data.reservationId,
+      reservationId: link.reservationId,
       activatedAt: acceptedAt,
       expiresAt: timeoutAt,
     });
     if (!activated?.ok) {
       return {
         ok: false,
-        delivery: sent.delivery,
+        delivery,
         errorCode: activated?.errorCode ?? "TOKEN_ACTIVATION_FAILED",
         retryable: Boolean(activated?.retryable),
       };
@@ -309,7 +439,17 @@ export class OutageWorkflow {
       idempotencyKey: `${purpose}:${statusCheck.id}`,
     });
 
-    return { ok: true, statusCheck, delivery: sent.delivery };
+    const activatedLink = activated.data ?? { ...link, activatedAt: acceptedAt, expiresAt: timeoutAt };
+    statusCheck.responseLink = activatedLink;
+    return {
+      ok: true,
+      started: true,
+      status: "STATUS_CHECK_STARTED",
+      statusCheck,
+      link: activatedLink,
+      delivery,
+      job: scheduled.job,
+    };
   }
 
   async #reserveLink(input) {
@@ -324,11 +464,12 @@ export class OutageWorkflow {
     return method.call(this.responseLinkIssuer, input);
   }
 
-  async #escalateGuardian({ outage, impactCase, patient, now }) {
+  async #escalateGuardian({ outage, impactCase, patient, now, preserveRisk = false }) {
     const target = selectEscalationTarget({
       contacts: patient.emergencyContacts ?? [],
       escalationRound: impactCase.escalationRound,
     });
+    impactCase.escalationRound = target.nextEscalationRound;
 
     if (target.exhausted) {
       if (!preserveRisk) {
@@ -344,6 +485,8 @@ export class OutageWorkflow {
         return {
           impactCase,
           notified: "NONE",
+          skipped: true,
+          reason: "NO_RECIPIENT_AVAILABLE",
           error: institutionResult.error ?? "NO_RECIPIENT_AVAILABLE",
           errorCode: institutionResult.errorCode,
           retryable: institutionResult.retryable,
@@ -368,7 +511,6 @@ export class OutageWorkflow {
     });
     if (!deliveryAccepted(sent)) return { impactCase, notified: "NONE", ...deliveryFailure(sent) };
 
-    impactCase.escalationRound = target.nextEscalationRound;
     impactCase.updatedAt = new Date(now).toISOString();
     let institutionResult = null;
     if (impactCase.riskLevel === "CRITICAL") {

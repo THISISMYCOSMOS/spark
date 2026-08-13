@@ -1,4 +1,5 @@
 export * from "./ai/context.js";
+export * from "./ai/gemini-client.js";
 export * from "./ai/patient-context-interpreter.js";
 export * from "./disasters/pdf-ingestion.js";
 export * from "./notifications/ai-message-composer.js";

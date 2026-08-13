@@ -25,6 +25,23 @@ function normalizeDeviceType(value) {
   const normalized = typeof value === "string" ? value.normalize("NFKC").trim() : "";
   return DEVICE_CODES[normalized] ?? "OTHER_POWERED_MEDICAL_DEVICE";
 }
+
+function sanitizeClinicalText(value, patient) {
+  if (typeof value !== "string") return null;
+  let sanitized = value.normalize("NFKC");
+  for (const identifier of [patient.name, patient.phone, patient.addressText, patient.address]) {
+    if (typeof identifier === "string" && identifier.trim()) {
+      sanitized = sanitized.replaceAll(identifier.normalize("NFKC"), "[REDACTED]");
+    }
+  }
+  sanitized = sanitized
+    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[REDACTED]")
+    .replace(/(?:\+?82[-\s]?)?0?1[016789](?:[-\s]?\d){7,8}/g, "[REDACTED]")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized ? sanitized.slice(0, 500) : null;
+}
+
 export function buildPatientInterpretationRequest(patient = {}) {
   const profile = patient.powerProfile ?? {};
   return {
@@ -35,10 +52,10 @@ export function buildPatientInterpretationRequest(patient = {}) {
       "허용된 코드만 JSON으로 반환하세요.",
     ].join(" "),
     facts: {
-      diagnosisText: typeof patient.diagnosis === "string" ? patient.diagnosis.slice(0, 500) : null,
+      diagnosisText: sanitizeClinicalText(patient.diagnosis, patient),
       devices: Array.isArray(profile.devices)
         ? profile.devices.map((device) => ({
-            deviceType: typeof device.deviceType === "string" ? device.deviceType.slice(0, 100) : null,
+            deviceType: sanitizeClinicalText(device.deviceType, patient)?.slice(0, 100) ?? null,
             batteryRuntimeMinutes: Number.isFinite(device.batteryRuntimeMinutes) ? device.batteryRuntimeMinutes : null,
             runtimeVerified: Boolean(device.runtimeVerified),
             isEssential: Boolean(device.isEssential),

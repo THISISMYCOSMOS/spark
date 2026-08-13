@@ -44,9 +44,10 @@ function failedResult({ provider, providerMessageId = null, errorCode, retryable
 export class MockSmsProvider {
   kind = "MOCK";
 
-  constructor({ failRecipients = [], clock = () => new Date() } = {}) {
+  constructor({ failRecipients = [], clock = () => new Date(), acceptedAtFactory = null } = {}) {
     this.failRecipients = new Set(failRecipients);
     this.clock = clock;
+    this.acceptedAtFactory = acceptedAtFactory;
     this.messages = [];
   }
 
@@ -62,7 +63,7 @@ export class MockSmsProvider {
     const result = acceptedResult({
       provider: this.kind,
       providerMessageId: `mock-${this.messages.length + 1}`,
-      acceptedAt: now ?? this.clock(),
+      acceptedAt: this.acceptedAtFactory ? this.acceptedAtFactory() : now ?? this.clock(),
     });
     this.messages.push({ ...message, ...result });
     return result;

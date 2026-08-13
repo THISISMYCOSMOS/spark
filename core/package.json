@@ -12,6 +12,7 @@
     "node": ">=20.16"
   },
   "dependencies": {
+    "@google/genai": "2.14.0",
     "pdfjs-dist": "5.4.149"
   }
 }
