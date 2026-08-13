@@ -3,10 +3,11 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..models import GuardianActionStatus, PatientResponseType, StatusCheckPurpose
-from ..outages.schemas import ensure_aware
+from ..outages.schemas import canonical_uuid, ensure_aware
 
 
 class StatusCheckRegisterRequest(BaseModel):
+    id: str = Field(min_length=36, max_length=36)
     purpose: StatusCheckPurpose
     token: str = Field(min_length=24, max_length=500)
     requested_at: datetime
@@ -18,14 +19,27 @@ class StatusCheckRegisterRequest(BaseModel):
     @classmethod
     def aware_time(cls, value): return ensure_aware(value)
 
+    @field_validator("id", mode="before")
+    @classmethod
+    def valid_id(cls, value): return canonical_uuid(value)
+
+    @field_validator("purpose", mode="before")
+    @classmethod
+    def legacy_purpose(cls, value):
+        aliases = {
+            "OUTAGE_CHECK": StatusCheckPurpose.OUTAGE_STATUS,
+            "RECOVERY_CHECK": StatusCheckPurpose.RECOVERY_CONFIRMATION,
+        }
+        return aliases.get(value, value)
+
     @model_validator(mode="after")
     def chronology(self):
-        if self.provider_accepted_at < self.requested_at:
-            raise ValueError("공급자 접수 시각은 요청 시각보다 빠를 수 없습니다.")
+        if self.provider_accepted_at != self.requested_at:
+            raise ValueError("requested_at은 provider_accepted_at과 같아야 합니다.")
         if self.response_due_at <= self.provider_accepted_at:
             raise ValueError("응답 제한 시각은 공급자 접수 이후여야 합니다.")
-        if self.token_expires_at < self.response_due_at:
-            raise ValueError("토큰 만료 시각은 응답 제한 시각보다 빠를 수 없습니다.")
+        if self.token_expires_at != self.response_due_at:
+            raise ValueError("token_expires_at은 response_due_at과 같아야 합니다.")
         return self
 
 
@@ -44,6 +58,11 @@ class PublicCheckInResponse(BaseModel):
     home_power_restored: bool | None = None
     device_operating_normally: bool | None = None
     note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("response_type", mode="before")
+    @classmethod
+    def legacy_response_type(cls, value):
+        return PatientResponseType.NORMAL if value == "OK" else value
 
 
 class GuardianActionRequest(BaseModel):

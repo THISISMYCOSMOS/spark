@@ -148,7 +148,8 @@ test("모든 보호자가 대응 불가면 CRITICAL이다", () => {
 });
 
 test("DEMO_ONLY 위험정책은 명시적으로 버전과 라벨을 갖는다", () => {
-  assert.equal(DEMO_ONLY_RISK_POLICY.policyId, "DEMO_ONLY");
+  assert.equal(DEMO_ONLY_RISK_POLICY.policyId, "00000000-0000-0000-0000-000000000001");
+  assert.equal(DEMO_ONLY_RISK_POLICY.name, "DEMO_ONLY_DEFAULT");
   assert.equal(typeof DEMO_ONLY_RISK_POLICY.version, "number");
   assert.equal(DEMO_ONLY_RISK_POLICY.responseTimeoutSeconds, 10);
 });
@@ -164,6 +165,7 @@ test("위험 판정 결과는 판정에 사용된 정책의 policyId와 policyVe
 
 test("StatusCheck는 응답 없이 기한이 지나면 TIMED_OUT이며 PatientResponse가 아니다", () => {
   const check = createStatusCheck({ impactCaseId: "case-1", purpose: "OUTAGE_STATUS", now: "2026-08-13T10:00:00.000Z", timeoutSeconds: 10 });
+  assert.match(check.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.equal(check.status, StatusCheckStatus.PENDING);
   assert.equal(isStatusCheckDue(check, "2026-08-13T10:00:09.000Z"), false);
   assert.equal(isStatusCheckDue(check, "2026-08-13T10:00:10.000Z"), true);
@@ -252,6 +254,7 @@ test("생성된 ImpactCase 스냅샷은 판정에 쓰인 policyId와 policyVersi
   };
   const patients = [{ id: "patient-1", regionCode: "11260", powerProfile: { batteryRuntimeMinutes: 180, safetyBufferMinutes: 30 } }];
   const { created } = createImpactCases({ outage, patients, now: "2026-08-13T10:00:00.000Z", riskPolicy: DEMO_ONLY_RISK_POLICY });
+  assert.match(created[0].id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.equal(created[0].policyId, DEMO_ONLY_RISK_POLICY.policyId);
   assert.equal(created[0].policyVersion, DEMO_ONLY_RISK_POLICY.version);
 });
@@ -267,8 +270,8 @@ test("예고 정전(SCHEDULED)은 아직 위험을 매기지 않고 PREPARE 상�
 // --- case closing ----------------------------------------------------------
 
 test("복구 확인은 가구 전력과 장비가 모두 정상이어야 종료를 허용한다", () => {
-  assert.equal(canCloseImpactCase({ recoveryConfirmation: { householdPowerNormal: true, deviceNormal: true } }), true);
-  assert.equal(canCloseImpactCase({ recoveryConfirmation: { householdPowerNormal: true, deviceNormal: false } }), false);
+  assert.equal(canCloseImpactCase({ recoveryConfirmation: { homePowerRestored: true, deviceOperatingNormally: true } }), true);
+  assert.equal(canCloseImpactCase({ recoveryConfirmation: { homePowerRestored: true, deviceOperatingNormally: false } }), false);
   assert.equal(canCloseImpactCase({ recoveryConfirmation: null }), false);
 });
 

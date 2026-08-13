@@ -4,7 +4,8 @@ import { SafetyTimeStatus } from "./safety-time.js";
 // DEMO_ONLY: not confirmed by product/medical stakeholders. Replace before any real decision use.
 // Versioned so a later approved policy can be swapped in without touching callers.
 export const DEMO_ONLY_RISK_POLICY = Object.freeze({
-  policyId: "DEMO_ONLY",
+  policyId: "00000000-0000-0000-0000-000000000001",
+  name: "DEMO_ONLY_DEFAULT",
   version: 1,
   responseTimeoutSeconds: 10,
   // ratio > watchRatioThreshold => WATCH

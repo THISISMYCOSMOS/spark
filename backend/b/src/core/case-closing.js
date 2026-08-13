@@ -5,7 +5,10 @@ import { ImpactCaseStatus } from "../contracts.js";
  * transitions. Both household power and device must be confirmed normal.
  */
 export function canCloseImpactCase({ recoveryConfirmation }) {
-  return Boolean(recoveryConfirmation?.householdPowerNormal === true && recoveryConfirmation?.deviceNormal === true);
+  return Boolean(
+    recoveryConfirmation?.homePowerRestored === true &&
+    recoveryConfirmation?.deviceOperatingNormally === true
+  );
 }
 
 export function canCloseOutage({ caseSnapshots = [] }) {

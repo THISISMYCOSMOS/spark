@@ -252,7 +252,7 @@ POST /api/v1/public/check-ins/{token}/responses
 
 ```json
 {
-  "response_type": "OK",
+  "response_type": "NORMAL",
   "note": null
 }
 ```
@@ -359,7 +359,7 @@ GUARDIAN, PATIENT
 ### 환자 응답
 
 ```text
-OK, NEED_HELP, EQUIPMENT_ISSUE
+NORMAL, NEED_HELP, EQUIPMENT_ISSUE
 ```
 
 ### 보호자 행동
@@ -436,4 +436,3 @@ export async function apiRequest(path, options = {}) {
 - [ ] `401`, `409`, `410`, `422` 화면 처리
 - [ ] 공개 응답 화면에서 개인정보 미노출
 - [ ] 운영 환경에서 HTTPS 사용
-
