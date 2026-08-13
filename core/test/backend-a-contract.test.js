@@ -50,6 +50,7 @@ test("상태 확인 ID를 전달하고 공급자 접수 시각부터 응답 타�
     idempotencyKey: "check-1",
   }).data;
   assert.match(reserved.url, /^https:\/\/frontend\.test\/check-in\//);
+  assert.equal(new URL(reserved.url).searchParams.get("purpose"), "OUTAGE_STATUS");
 
   const result = await port.activateLink({
     reservationId: reserved.reservationId,

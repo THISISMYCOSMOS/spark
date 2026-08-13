@@ -1,5 +1,10 @@
 import { apiRequest, getPatientId } from "@/lib/api/client";
-import type { CurrentImpactCaseView, PatientResponseView, UserRole } from "@/lib/api/types";
+import type {
+  CurrentImpactCaseView,
+  PatientResponseView,
+  PublicCheckInResponseView,
+  UserRole,
+} from "@/lib/api/types";
 
 export async function getCurrentImpactCase(role: UserRole) {
   const patientId = getPatientId(role);
@@ -7,6 +12,25 @@ export async function getCurrentImpactCase(role: UserRole) {
   return apiRequest<CurrentImpactCaseView>(
     `/api/v1/patients/${encodeURIComponent(patientId)}/current-impact-case`,
     { method: "GET", role },
+  );
+}
+
+export function submitPublicCheckInResponse(
+  token: string,
+  body:
+    | {
+        response_type: "NORMAL" | "NEED_HELP" | "EQUIPMENT_ISSUE";
+        note: string | null;
+      }
+    | {
+        home_power_restored: boolean;
+        device_operating_normally: boolean;
+        note: string | null;
+      },
+) {
+  return apiRequest<PublicCheckInResponseView>(
+    `/api/v1/public/check-ins/${encodeURIComponent(token)}/responses`,
+    { method: "POST", body },
   );
 }
 

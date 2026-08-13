@@ -16,10 +16,12 @@ export class BackendAResponseTokenPort {
     }
     const reservationId = randomUUID();
     const token = randomBytes(24).toString("base64url");
+    const responseUrl = new URL(`/check-in/${encodeURIComponent(token)}`, this.responseBaseUrl);
+    responseUrl.searchParams.set("purpose", purpose);
     const reservation = {
       reservationId,
       token,
-      url: new URL(`/check-in/${encodeURIComponent(token)}`, this.responseBaseUrl).toString(),
+      url: responseUrl.toString(),
       impactCaseId,
       purpose,
       requestedAt: new Date(now).toISOString(),

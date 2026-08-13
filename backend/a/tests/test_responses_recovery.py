@@ -8,7 +8,7 @@ from app.main import app
 from app.models import (
     AuditLog, EmergencyContact, Guardian, GuardianPatient, ImpactCase, ImpactCaseStatus, OperationMode,
     OutageEvent, OutageEventHistory, OutageStatus, OutageType, Patient, PatientResponse, RiskLevel, RiskPolicy,
-    StatusCheck, StatusCheckStatus, UserRole,
+    GuardianAction, StatusCheck, StatusCheckStatus, UserRole,
 )
 from app.security import create_access_token, hash_password
 
@@ -100,9 +100,20 @@ def test_patient_response_token_once_and_guardian_action():
         assert action.status_code == 201, action.text
         assert action.json()["data"]["status"] == "ACTING"
 
+        completed = client.post(
+            f"/api/v1/impact-cases/{IDS['case']}/guardian-actions",
+            json={"emergency_contact_id": IDS["contact"], "status": "COMPLETED", "escalation_round": 1, "note": "전원 연결 완료", "acted_at": datetime.now(timezone.utc).isoformat()},
+            headers=auth(UserRole.GUARDIAN, IDS["guardian"], "guardian-action-completed-01"),
+        )
+        assert completed.status_code == 201, completed.text
+        assert completed.json()["data"]["status"] == "COMPLETED"
+
     with SessionLocal() as db:
         assert db.scalar(select(StatusCheck)).status == StatusCheckStatus.RESPONDED
         assert db.scalar(select(PatientResponse)).response_type.value == "NORMAL"
+        actions = db.scalars(select(GuardianAction)).all()
+        assert len(actions) == 1
+        assert actions[0].status.value == "COMPLETED"
 
 
 def test_logged_in_patient_response_uses_pending_status_check():
@@ -165,6 +176,28 @@ def test_response_plan_is_saved_and_visible_to_linked_accounts():
             headers=auth(UserRole.GUARDIAN, IDS["guardian"]),
         )
         assert guardian_view.status_code == 200, guardian_view.text
+
+
+def test_current_case_uses_latest_status_check_deadline():
+    due_at = datetime.now(timezone.utc) + timedelta(minutes=3)
+    with SessionLocal() as db:
+        db.add(StatusCheck(
+            id=IDS["check"], impact_case_id=IDS["case"], purpose="OUTAGE_STATUS",
+            status=StatusCheckStatus.PENDING, token_digest="b" * 64,
+            requested_at=due_at - timedelta(minutes=1),
+            provider_accepted_at=due_at - timedelta(minutes=1),
+            response_due_at=due_at, token_expires_at=due_at,
+        ))
+        db.commit()
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/v1/patients/{IDS['patient']}/current-impact-case",
+            headers=auth(UserRole.PATIENT, IDS["patient"]),
+        )
+        assert response.status_code == 200, response.text
+        actual = datetime.fromisoformat(response.json()["data"]["impactCase"]["responseDueAt"])
+        assert actual == due_at
 
 
 def test_legacy_recovery_purpose_is_stored_and_returned_canonically():

@@ -10,6 +10,13 @@ import { InfoCard } from "@/components/guardian/InfoCard";
 import { PrimaryButton } from "@/components/guardian/Buttons";
 import { OutageTag } from "@/components/guardian/OutageTag";
 import { useGuardianOutageFlow, useOutageInfo } from "@/hooks/useOutageFlow";
+import { useOutage } from "@/contexts/OutageContext";
+import { isRealApiMode } from "@/lib/api/client";
+import {
+  formatKoreanDuration,
+  serverRemainingSeconds,
+  serverResponseSeconds,
+} from "@/lib/outageTime";
 
 export const Route = createFileRoute("/guardian/alert")({
   head: () => ({
@@ -36,15 +43,28 @@ function GuardianAlert() {
   const goBack = useBack("/guardian/home");
   useGuardianOutageFlow();
   const { bandLabel, restoreLabel } = useOutageInfo();
-  const [left, setLeft] = useState(180);
+  const { currentImpactCase } = useOutage();
+  const realMode = isRealApiMode();
+  const [left, setLeft] = useState(() =>
+    realMode ? (serverResponseSeconds(currentImpactCase) ?? 180) : 180,
+  );
+  const [runtime, setRuntime] = useState(() =>
+    realMode ? (serverRemainingSeconds(currentImpactCase) ?? 10080) : 10080,
+  );
 
   useEffect(() => {
-    setLeft(180);
+    setLeft(realMode ? (serverResponseSeconds(currentImpactCase) ?? 180) : 180);
+    setRuntime(realMode ? (serverRemainingSeconds(currentImpactCase) ?? 10080) : 10080);
     const id = window.setInterval(() => {
-      setLeft((v) => (v > 0 ? v - 1 : 0));
+      if (realMode) {
+        setLeft(serverResponseSeconds(currentImpactCase) ?? 180);
+        setRuntime(serverRemainingSeconds(currentImpactCase) ?? 10080);
+      } else {
+        setLeft((v) => (v > 0 ? v - 1 : 0));
+      }
     }, 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [currentImpactCase, realMode]);
 
   useEffect(() => {
     if (left === 0) void navigate({ to: "/guardian/noresponse" });
@@ -74,7 +94,7 @@ function GuardianAlert() {
 
       <div className="mt-4 flex flex-col gap-3">
         <DuoStat
-          left={{ label: "버틸 수 있는 시간", value: "2시간 48분", tone: "warn" }}
+          left={{ label: "버틸 수 있는 시간", value: formatKoreanDuration(runtime), tone: "warn" }}
           right={{ label: "현재 위치에서", value: "차로 12분", tone: "ink" }}
         />
 

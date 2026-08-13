@@ -87,6 +87,17 @@ export interface PatientDetail extends PatientView {
   version: number;
   createdAt: string;
   updatedAt: string;
+  emergencyContacts: EmergencyContactView[];
+}
+
+export interface EmergencyContactView {
+  id: string;
+  guardianId: string | null;
+  name: string;
+  phone: string;
+  relationship: string | null;
+  priority: number;
+  isActive: boolean;
 }
 
 export interface AiResponsePlanAction {
@@ -138,4 +149,39 @@ export interface PatientResponseView {
   purpose: "OUTAGE_STATUS";
   responseType: "NORMAL" | "NEED_HELP" | "EQUIPMENT_ISSUE";
   acceptedAt: string;
+}
+
+export interface PublicCheckInResponseView {
+  statusCheckId: string;
+  purpose: "OUTAGE_STATUS" | "RECOVERY_CONFIRMATION";
+  responseType?: "NORMAL" | "NEED_HELP" | "EQUIPMENT_ISSUE";
+  homePowerRestored?: boolean;
+  deviceOperatingNormally?: boolean;
+  caseClosed?: boolean;
+  decisionPending?: boolean;
+  acceptedAt: string;
+}
+
+export interface GuardianActionView {
+  id: string;
+  impactCaseId: string;
+  emergencyContactId: string;
+  guardianId: string | null;
+  status: "CONTACTED" | "ACTING" | "UNAVAILABLE" | "COMPLETED";
+  escalationRound: number;
+  note: string | null;
+  actedAt: string;
+}
+
+export interface RecoveryConfirmationView {
+  id: string;
+  impactCaseId: string;
+  homePowerRestored: boolean;
+  deviceOperatingNormally: boolean;
+  confirmedById: string;
+  confirmedByRole: "GUARDIAN" | "PATIENT" | "INSTITUTION_ADMIN";
+  reason: string;
+  confirmedAt: string;
+  caseClosed: false;
+  decisionPending: true;
 }

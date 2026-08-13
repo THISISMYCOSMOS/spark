@@ -8,6 +8,11 @@ import { useOutageInfo, useOutageRedirect } from "@/hooks/useOutageFlow";
 import { useOutage } from "@/contexts/OutageContext";
 import { aiResponsePlan } from "@/data/mock";
 import { isRealApiMode } from "@/lib/api/client";
+import {
+  serverRemainingSeconds,
+  serverResponseSeconds,
+  serverRuntimeSeconds,
+} from "@/lib/outageTime";
 
 export const Route = createFileRoute("/alert/")({
   head: () => ({
@@ -36,12 +41,22 @@ function Page() {
   // 정전이 끝나면(mode: 'calm') 마무리 화면으로 이동합니다.
   useOutageRedirect("calm", "/after/done", true);
 
-  const totalSeconds = demo.autonomySeconds;
-  const [remaining, setRemaining] = useState(totalSeconds);
-  const [countdown, setCountdown] = useState(demo.escalationSeconds);
+  const realMode = isRealApiMode();
+  const serverTotal = serverRuntimeSeconds(currentImpactCase);
+  const totalSeconds = realMode && serverTotal !== null ? serverTotal : demo.autonomySeconds;
+  const [remaining, setRemaining] = useState(() =>
+    realMode
+      ? (serverRemainingSeconds(currentImpactCase) ?? demo.autonomySeconds)
+      : demo.autonomySeconds,
+  );
+  const [countdown, setCountdown] = useState(() =>
+    realMode
+      ? (serverResponseSeconds(currentImpactCase) ?? demo.escalationSeconds)
+      : demo.escalationSeconds,
+  );
   const [isPlanOpen, setIsPlanOpen] = useState(true);
   const [submitError, setSubmitError] = useState("");
-  const plan = isRealApiMode() ? currentImpactCase?.impactCase.responsePlan : aiResponsePlan;
+  const plan = realMode ? currentImpactCase?.impactCase.responsePlan : aiResponsePlan;
   const isVisiblePlanOpen = Boolean(plan) && isPlanOpen;
 
   const answeredRef = useRef(false);
@@ -67,21 +82,51 @@ function Page() {
 
   // 화면에 들어온 순간 시작하고, 벗어나면 정지합니다.
   useEffect(() => {
-    setRemaining(demo.autonomySeconds);
-  }, [demo.autonomySeconds]);
+    setRemaining(
+      realMode
+        ? (serverRemainingSeconds(currentImpactCase) ?? demo.autonomySeconds)
+        : demo.autonomySeconds,
+    );
+    setCountdown(
+      realMode
+        ? (serverResponseSeconds(currentImpactCase) ?? demo.escalationSeconds)
+        : demo.escalationSeconds,
+    );
+  }, [
+    currentImpactCase,
+    currentImpactCase?.impactCase.id,
+    currentImpactCase?.impactCase.effectiveRuntimeMinutes,
+    currentImpactCase?.impactCase.responseDueAt,
+    currentImpactCase?.outage.startedAt,
+    currentImpactCase?.outage.scheduledStartAt,
+    demo.autonomySeconds,
+    demo.escalationSeconds,
+    realMode,
+  ]);
 
   useEffect(() => {
-    setCountdown((prev) => Math.min(prev, demo.escalationSeconds));
-  }, [demo.escalationSeconds]);
-
-  useEffect(() => {
-    if (isVisiblePlanOpen) return;
-    const id = window.setInterval(() => {
-      setRemaining((prev) => Math.max(0, prev - 1));
-      setCountdown((prev) => Math.max(0, prev - 1));
-    }, 1000 / demo.speed);
+    if (!realMode && isVisiblePlanOpen) return;
+    const id = window.setInterval(
+      () => {
+        if (realMode) {
+          setRemaining(serverRemainingSeconds(currentImpactCase) ?? demo.autonomySeconds);
+          setCountdown(serverResponseSeconds(currentImpactCase) ?? demo.escalationSeconds);
+        } else {
+          setRemaining((prev) => Math.max(0, prev - 1));
+          setCountdown((prev) => Math.max(0, prev - 1));
+        }
+      },
+      realMode ? 1000 : 1000 / demo.speed,
+    );
     return () => window.clearInterval(id);
-  }, [demo.speed, isVisiblePlanOpen]);
+  }, [
+    currentImpactCase,
+    demo.autonomySeconds,
+    demo.escalationSeconds,
+    demo.speed,
+    isVisiblePlanOpen,
+    realMode,
+  ]);
 
   useEffect(() => {
     if (remaining === 0) void answerAndGo("call");

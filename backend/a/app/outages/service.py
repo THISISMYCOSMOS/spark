@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from ..errors import ConflictError, ForbiddenError, NotFoundError
 from ..models import (
     AuditAction, AuditLog, ImpactCase, ImpactCaseStatus, OutageEvent, OutageEventHistory,
-    OutageStatus, OutageType, PatientResponse, StatusCheck, UserRole,
+    OutageStatus, OutageType, PatientResponse, StatusCheck, StatusCheckPurpose, UserRole,
 )
 from ..audit_repository import AuditLogRepository
 from ..patients.repositories import GuardianPatientRepository
@@ -136,9 +136,34 @@ class OutageService:
             "note": latest_response.note,
             "respondedAt": latest_response.responded_at.isoformat(),
         }
+        latest_status_check = self.db.scalar(
+            select(StatusCheck)
+            .where(
+                StatusCheck.impact_case_id == case.id,
+                StatusCheck.purpose == StatusCheckPurpose.OUTAGE_STATUS,
+            )
+            .order_by(StatusCheck.requested_at.desc())
+            .limit(1)
+        )
+        case_view = impact_case_view(case)
+        if latest_status_check is not None:
+            response_due_at = latest_status_check.response_due_at
+            if response_due_at.tzinfo is None:
+                response_due_at = response_due_at.replace(tzinfo=timezone.utc)
+            case_view["responseDueAt"] = response_due_at.isoformat()
+        current_outage_view = outage_view(case.outage)
+        for field, value in (
+            ("scheduledStartAt", case.outage.scheduled_start_at),
+            ("expectedEndAt", case.outage.expected_end_at),
+            ("startedAt", case.outage.started_at),
+        ):
+            if value is not None:
+                current_outage_view[field] = (
+                    value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+                ).isoformat()
         return {
-            "outage": outage_view(case.outage),
-            "impactCase": impact_case_view(case),
+            "outage": current_outage_view,
+            "impactCase": case_view,
             "patientResponse": response_view,
         }
 

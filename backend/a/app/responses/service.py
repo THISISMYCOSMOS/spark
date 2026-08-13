@@ -143,16 +143,33 @@ class ResponseService:
             raise ForbiddenError("GUARDIAN_ACCESS_DENIED", "해당 환자의 보호자가 아닙니다.")
         if role not in {UserRole.GUARDIAN, UserRole.INSTITUTION_ADMIN}:
             raise ForbiddenError("ROLE_REQUIRED", "보호자 또는 기관 관리자 역할이 필요합니다.")
-        action = GuardianAction(
-            impact_case_id=case.id, emergency_contact_id=contact.id,
-            guardian_id=actor_id if role == UserRole.GUARDIAN else contact.guardian_id,
-            status=body.status, escalation_round=body.escalation_round, note=body.note, acted_at=body.acted_at,
+        action = self.db.scalar(
+            select(GuardianAction).where(
+                GuardianAction.impact_case_id == case.id,
+                GuardianAction.emergency_contact_id == contact.id,
+                GuardianAction.escalation_round == body.escalation_round,
+            )
         )
-        self.db.add(action)
+        before = None
+        audit_action = AuditAction.CREATED
+        if action is None:
+            action = GuardianAction(
+                impact_case_id=case.id, emergency_contact_id=contact.id,
+                guardian_id=actor_id if role == UserRole.GUARDIAN else contact.guardian_id,
+                status=body.status, escalation_round=body.escalation_round, note=body.note, acted_at=body.acted_at,
+            )
+            self.db.add(action)
+        else:
+            before = self._action_view(action)
+            audit_action = AuditAction.UPDATED
+            action.guardian_id = actor_id if role == UserRole.GUARDIAN else contact.guardian_id
+            action.status = body.status
+            action.note = body.note
+            action.acted_at = body.acted_at
         self.db.flush()
         view = self._action_view(action)
-        self._audit("GuardianAction", action.id, AuditAction.CREATED, actor_id, role, body.note or body.status.value, None, view)
-        self._commit("GUARDIAN_ACTION_CONFLICT", "동일 보호자 대응 기록이 이미 존재합니다.")
+        self._audit("GuardianAction", action.id, audit_action, actor_id, role, body.note or body.status.value, before, view)
+        self._commit("GUARDIAN_ACTION_CONFLICT", "보호자 대응 기록 저장이 충돌했습니다.")
         return view
 
     def manual_recovery(self, actor_id: str, role: UserRole, case_id: str, body: RecoveryConfirmationRequest) -> dict:

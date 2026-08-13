@@ -18,6 +18,7 @@ import { Route as AfterGuardianRouteImport } from './routes/after.guardian'
 import { Route as AfterOkRouteImport } from './routes/after.ok'
 import { Route as AlertIndexRouteImport } from './routes/alert.index'
 import { Route as AlertSentRouteImport } from './routes/alert.sent'
+import { Route as CheckInTokenRouteImport } from './routes/check-in.$token'
 import { Route as GuardianAlertRouteImport } from './routes/guardian.alert'
 import { Route as GuardianCheckinRouteImport } from './routes/guardian.checkin'
 import { Route as GuardianClosedRouteImport } from './routes/guardian.closed'
@@ -88,6 +89,11 @@ const AlertIndexRoute = AlertIndexRouteImport.update({
 const AlertSentRoute = AlertSentRouteImport.update({
   id: '/alert/sent',
   path: '/alert/sent',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CheckInTokenRoute = CheckInTokenRouteImport.update({
+  id: '/check-in/$token',
+  path: '/check-in/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GuardianAlertRoute = GuardianAlertRouteImport.update({
@@ -230,6 +236,7 @@ export interface FileRoutesByFullPath {
   '/after/guardian': typeof AfterGuardianRoute
   '/after/ok': typeof AfterOkRoute
   '/alert/sent': typeof AlertSentRoute
+  '/check-in/$token': typeof CheckInTokenRoute
   '/guardian/alert': typeof GuardianAlertRoute
   '/guardian/checkin': typeof GuardianCheckinRoute
   '/guardian/closed': typeof GuardianClosedRoute
@@ -267,6 +274,7 @@ export interface FileRoutesByTo {
   '/after/guardian': typeof AfterGuardianRoute
   '/after/ok': typeof AfterOkRoute
   '/alert/sent': typeof AlertSentRoute
+  '/check-in/$token': typeof CheckInTokenRoute
   '/guardian/alert': typeof GuardianAlertRoute
   '/guardian/checkin': typeof GuardianCheckinRoute
   '/guardian/closed': typeof GuardianClosedRoute
@@ -305,6 +313,7 @@ export interface FileRoutesById {
   '/after/guardian': typeof AfterGuardianRoute
   '/after/ok': typeof AfterOkRoute
   '/alert/sent': typeof AlertSentRoute
+  '/check-in/$token': typeof CheckInTokenRoute
   '/guardian/alert': typeof GuardianAlertRoute
   '/guardian/checkin': typeof GuardianCheckinRoute
   '/guardian/closed': typeof GuardianClosedRoute
@@ -344,6 +353,7 @@ export interface FileRouteTypes {
     | '/after/guardian'
     | '/after/ok'
     | '/alert/sent'
+    | '/check-in/$token'
     | '/guardian/alert'
     | '/guardian/checkin'
     | '/guardian/closed'
@@ -381,6 +391,7 @@ export interface FileRouteTypes {
     | '/after/guardian'
     | '/after/ok'
     | '/alert/sent'
+    | '/check-in/$token'
     | '/guardian/alert'
     | '/guardian/checkin'
     | '/guardian/closed'
@@ -418,6 +429,7 @@ export interface FileRouteTypes {
     | '/after/guardian'
     | '/after/ok'
     | '/alert/sent'
+    | '/check-in/$token'
     | '/guardian/alert'
     | '/guardian/checkin'
     | '/guardian/closed'
@@ -456,6 +468,7 @@ export interface RootRouteChildren {
   AfterGuardianRoute: typeof AfterGuardianRoute
   AfterOkRoute: typeof AfterOkRoute
   AlertSentRoute: typeof AlertSentRoute
+  CheckInTokenRoute: typeof CheckInTokenRoute
   GuardianAlertRoute: typeof GuardianAlertRoute
   GuardianCheckinRoute: typeof GuardianCheckinRoute
   GuardianClosedRoute: typeof GuardianClosedRoute
@@ -548,6 +561,13 @@ declare module '@tanstack/react-router' {
       path: '/alert/sent'
       fullPath: '/alert/sent'
       preLoaderRoute: typeof AlertSentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/check-in/$token': {
+      id: '/check-in/$token'
+      path: '/check-in/$token'
+      fullPath: '/check-in/$token'
+      preLoaderRoute: typeof CheckInTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/guardian/alert': {
@@ -744,6 +764,7 @@ const rootRouteChildren: RootRouteChildren = {
   AfterGuardianRoute: AfterGuardianRoute,
   AfterOkRoute: AfterOkRoute,
   AlertSentRoute: AlertSentRoute,
+  CheckInTokenRoute: CheckInTokenRoute,
   GuardianAlertRoute: GuardianAlertRoute,
   GuardianCheckinRoute: GuardianCheckinRoute,
   GuardianClosedRoute: GuardianClosedRoute,

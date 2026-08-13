@@ -11,6 +11,7 @@ interface BigButtonProps {
   href?: string;
   onClick?: () => void;
   className?: string;
+  disabled?: boolean;
 }
 
 const toneClass: Record<Tone, string> = {
@@ -28,6 +29,7 @@ export function BigButton({
   href,
   onClick,
   className = "",
+  disabled = false,
 }: BigButtonProps) {
   const classes = `inline-block w-full rounded-[18px] p-6 text-left transition-opacity active:opacity-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ink/40 focus-visible:ring-offset-2 ${toneClass[variant]} ${className}`;
 
@@ -57,7 +59,7 @@ export function BigButton({
   }
 
   return (
-    <button type="button" className={classes} onClick={onClick}>
+    <button type="button" className={classes} onClick={onClick} disabled={disabled}>
       {content}
     </button>
   );
