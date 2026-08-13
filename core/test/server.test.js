@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createCoreServer } from "../src/server.js";
+import { createCoreServer, resolveListenAddress } from "../src/server.js";
 
 function result() {
   return {
@@ -36,6 +36,24 @@ async function withServer(options, callback) {
     );
   }
 }
+
+test("Render PORT가 있으면 모든 인터페이스에서 해당 포트를 사용한다", () => {
+  assert.deepEqual(resolveListenAddress({ PORT: "10000" }), {
+    host: "0.0.0.0",
+    port: 10000,
+  });
+});
+
+test("로컬 기본 주소와 명시적 CORE_HOST/CORE_PORT를 유지한다", () => {
+  assert.deepEqual(resolveListenAddress({}), {
+    host: "127.0.0.1",
+    port: 8100,
+  });
+  assert.deepEqual(
+    resolveListenAddress({ CORE_HOST: "0.0.0.0", CORE_PORT: "8200" }),
+    { host: "0.0.0.0", port: 8200 },
+  );
+});
 
 test("PDF 처리 API는 문자 ACCEPTED 이후 시작된 알람 결과를 반환한다", async () => {
   let received;

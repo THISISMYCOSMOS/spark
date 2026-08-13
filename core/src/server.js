@@ -434,9 +434,18 @@ export function createCoreServer({
   });
 }
 
+export function resolveListenAddress(env = process.env) {
+  const port = Number(env.PORT ?? env.CORE_PORT ?? 8100);
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error("INVALID_CORE_PORT");
+  return {
+    host: env.CORE_HOST ?? (env.PORT ? "0.0.0.0" : "127.0.0.1"),
+    port,
+  };
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const host = process.env.CORE_HOST ?? "127.0.0.1";
-  const port = Number(process.env.CORE_PORT ?? 8100);
+  const { host, port } = resolveListenAddress();
   const server = createCoreServer();
   server.listen(port, host, () => {
     console.log(`Core server listening on http://${host}:${port}`);
