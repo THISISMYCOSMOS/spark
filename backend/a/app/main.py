@@ -12,6 +12,7 @@ from .outages.router import router as outages_router
 from .patients.router import core_router as core_patients_router
 from .patients.router import router as patients_router
 from .responses.router import router as responses_router
+from .push.router import router as push_router
 
 
 @asynccontextmanager
@@ -25,7 +26,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origin_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
 )
 
@@ -51,3 +52,4 @@ app.include_router(patients_router)
 app.include_router(core_patients_router)
 app.include_router(outages_router)
 app.include_router(responses_router)
+app.include_router(push_router)
