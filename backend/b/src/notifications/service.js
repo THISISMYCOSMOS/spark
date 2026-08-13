@@ -28,13 +28,20 @@ export class InMemoryNotificationStore {
 }
 
 export class NotificationService {
-  constructor({ testProvider, liveProvider = null, store = new InMemoryNotificationStore(), maxAttempts = 3 }) {
+  constructor({
+    testProvider,
+    liveProvider = null,
+    store = new InMemoryNotificationStore(),
+    maxAttempts = 3,
+    clock = () => new Date(),
+  }) {
     if (!testProvider || testProvider.kind !== "MOCK") {
       throw new TypeError("TEST mode requires MockSmsProvider");
     }
     this.providers = { [Mode.TEST]: testProvider, [Mode.LIVE]: liveProvider };
     this.store = store;
     this.maxAttempts = maxAttempts;
+    this.clock = clock;
   }
 
   async send({
@@ -47,6 +54,7 @@ export class NotificationService {
     templateType,
     text,
     escalationRound = 0,
+    providerAcceptedAtFallback = null,
   }) {
     assertOneOf(mode, Mode, "mode");
     // Identity: caseId + notificationType + recipientId + escalationRound (v0.1 #6).
@@ -75,7 +83,7 @@ export class NotificationService {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
-    await this.#attempt(delivery, provider);
+    await this.#attempt(delivery, provider, providerAcceptedAtFallback);
     return { duplicate: false, delivery };
   }
 
@@ -98,12 +106,15 @@ export class NotificationService {
     return provider;
   }
 
-  async #attempt(delivery, provider) {
+  async #attempt(delivery, provider, providerAcceptedAtFallback = null) {
     const attemptedAt = new Date().toISOString();
     try {
       const result = await provider.send({ to: delivery.to, text: delivery.text });
       delivery.attempts.push({ attemptedAt, ok: true, providerMessageId: result.providerMessageId });
       delivery.providerMessageId = result.providerMessageId;
+      delivery.providerAcceptedAt = new Date(
+        result.providerAcceptedAt ?? providerAcceptedAtFallback ?? this.clock(),
+      ).toISOString();
       delivery.status = DeliveryStatus.SENT;
       delivery.lastError = null;
     } catch (error) {

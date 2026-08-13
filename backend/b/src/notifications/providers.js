@@ -1,14 +1,18 @@
 export class MockSmsProvider {
   kind = "MOCK";
 
-  constructor({ failRecipients = [] } = {}) {
+  constructor({ failRecipients = [], acceptedAtFactory = null } = {}) {
     this.failRecipients = new Set(failRecipients);
+    this.acceptedAtFactory = acceptedAtFactory;
     this.messages = [];
   }
 
   async send(message) {
     if (this.failRecipients.has(message.to)) throw new Error("MOCK_DELIVERY_FAILURE");
     const result = { providerMessageId: `mock-${this.messages.length + 1}`, accepted: true };
+    if (this.acceptedAtFactory) {
+      result.providerAcceptedAt = new Date(this.acceptedAtFactory()).toISOString();
+    }
     this.messages.push({ ...message, ...result });
     return result;
   }
@@ -34,6 +38,7 @@ export class SolapiSmsProvider {
     const result = await this.client.sendOne({ to, from: this.from, text });
     return {
       accepted: true,
+      providerAcceptedAt: new Date().toISOString(),
       providerMessageId: result.messageId ?? result.groupId ?? null,
       raw: result,
     };
