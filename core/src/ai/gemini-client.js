@@ -186,8 +186,6 @@ export class GeminiAiClient {
         contents: JSON.stringify(payload),
         config: {
           systemInstruction: typeof systemInstruction === "string" ? systemInstruction : "",
-          candidateCount: 1,
-          temperature: 0.2,
           maxOutputTokens,
           ...(responseJsonSchema
             ? { responseMimeType: "application/json", responseJsonSchema }

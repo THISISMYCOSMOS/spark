@@ -109,6 +109,10 @@ test("세 Gemini 메서드는 공식 SDK generateContent 요청으로 역할별 
   assert.equal(captured[0].config.responseMimeType, "application/json");
   assert.equal(captured[0].config.responseJsonSchema.type, "object");
   assert.equal(captured[1].config.responseMimeType, "text/plain");
+  for (const request of captured) {
+    assert.equal(Object.hasOwn(request.config, "candidateCount"), false);
+    assert.equal(Object.hasOwn(request.config, "temperature"), false);
+  }
   assert.deepEqual(JSON.parse(captured[2].contents).allowedActions, [
     { code: "CHECK_DEVICE_POWER", instructionKo: "의료기기 전원을 확인하세요." },
   ]);
