@@ -1,0 +1,18 @@
+{
+  "name": "chic-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "재난 PDF, 환자 컨텍스트, AI 대응방법 및 백엔드 연동 코어",
+  "scripts": {
+    "test": "node --test",
+    "test:watch": "node --test --watch"
+  },
+  "engines": {
+    "node": ">=20.16"
+  },
+  "dependencies": {
+    "@google/genai": "2.14.0",
+    "pdfjs-dist": "5.4.149"
+  }
+}
