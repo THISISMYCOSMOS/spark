@@ -39,7 +39,7 @@ function GuardianJoinProfile() {
   const updatePhone = (patch: Partial<Omit<PhoneEntry, "id">>) => {
     setField(
       "guardianPhones",
-      guardianPhones.map((p) => (p.id === phone.id ? { ...p, ...patch } : p))
+      guardianPhones.map((p) => (p.id === phone.id ? { ...p, ...patch } : p)),
     );
   };
 

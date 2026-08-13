@@ -48,10 +48,7 @@ function Page() {
     <PhoneShell>
       {/* 상단 색 띠 */}
       <div className="flex items-center gap-3 bg-safe px-6 pt-5 pb-[18px]">
-        <span
-          className="h-[14px] w-[14px] rounded-full bg-white"
-          aria-hidden="true"
-        />
+        <span className="h-[14px] w-[14px] rounded-full bg-white" aria-hidden="true" />
         <span className="t-body font-semibold leading-tight text-white">
           기계가 모두 잘 돌아가고 있습니다
         </span>
@@ -63,9 +60,7 @@ function Page() {
 
         {/* 전체 요약 카드 */}
         <div className="rounded-[18px] border-2 border-safe-line bg-safe-bg px-5 py-[15px]">
-          <p className="t-copy font-medium text-safe">
-            지금 이대로면 이만큼 씁니다
-          </p>
+          <p className="t-copy font-medium text-safe">지금 이대로면 이만큼 씁니다</p>
           <p className="mt-1 t-metric-md font-bold leading-tight text-safe">
             {formatDuration(totalRuntimeSeconds)}
           </p>
@@ -73,9 +68,7 @@ function Page() {
             {Array.from({ length: 8 }).map((_, i) => (
               <span
                 key={i}
-                className={`h-3 flex-1 rounded-[4px] ${
-                  i < filled ? "bg-safe" : "bg-[#D2DAE4]"
-                }`}
+                className={`h-3 flex-1 rounded-[4px] ${i < filled ? "bg-safe" : "bg-[#D2DAE4]"}`}
               />
             ))}
           </div>
@@ -98,14 +91,10 @@ function Page() {
                     {deviceBadge[device.id] ?? "켜짐"}
                   </span>
                 </div>
-                <p
-                  className={`t-body font-semibold leading-tight ${toneText[tone]}`}
-                >
+                <p className={`t-body font-semibold leading-tight ${toneText[tone]}`}>
                   {device.status}
                 </p>
-                <p className="t-copy-sm font-normal leading-[150%] text-dim">
-                  {device.usage}
-                </p>
+                <p className="t-copy-sm font-normal leading-[150%] text-dim">{device.usage}</p>
               </div>
             );
           })}

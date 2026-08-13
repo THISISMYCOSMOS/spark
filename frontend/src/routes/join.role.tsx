@@ -51,7 +51,6 @@ function Page() {
             variant="dark"
           />
         </div>
-
       </Pad>
 
       <Link
