@@ -73,13 +73,20 @@ export class InMemoryNotificationStore {
 }
 
 export class NotificationService {
-  constructor({ testProvider, liveProvider = null, store = new InMemoryNotificationStore(), maxAttempts = 3 }) {
+  constructor({
+    testProvider,
+    liveProvider = null,
+    store = new InMemoryNotificationStore(),
+    maxAttempts = 3,
+    clock = () => new Date(),
+  }) {
     if (!testProvider || testProvider.kind !== "MOCK") {
       throw new TypeError("TEST mode requires MockSmsProvider");
     }
     this.providers = { [Mode.TEST]: testProvider, [Mode.LIVE]: liveProvider };
     this.store = store;
     this.maxAttempts = maxAttempts;
+    this.clock = clock;
   }
 
   async send({

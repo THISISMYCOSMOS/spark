@@ -181,7 +181,13 @@ export class OutageWorkflow {
     if (target.exhausted) {
       const institutionPhone = this.#institutionPhone(patient);
       if (!institutionPhone) {
-        return { impactCase, notified: "NONE", error: "NO_RECIPIENT_AVAILABLE" };
+        return {
+          impactCase,
+          notified: "NONE",
+          skipped: true,
+          reason: "NO_RECIPIENT_AVAILABLE",
+          error: "NO_RECIPIENT_AVAILABLE",
+        };
       }
       const sent = await this.#send({
         outage: { id: impactCase.outageId, mode: impactCase.mode },
@@ -296,7 +302,7 @@ export class OutageWorkflow {
       purpose === STATUS_CHECK_PURPOSE.OUTAGE_STATUS ? ImpactCaseStatus.WAITING_PATIENT : ImpactCaseStatus.RECOVERY_CHECK;
     impactCase.updatedAt = acceptedAt;
 
-    this.jobQueue.schedule({
+    const scheduled = this.jobQueue.schedule({
       type: purpose === STATUS_CHECK_PURPOSE.OUTAGE_STATUS ? JobType.STATUS_CHECK_TIMEOUT : JobType.RECOVERY_TIMEOUT,
       runAt: statusCheck.timeoutAt,
       payload: { impactCaseId: impactCase.id, statusCheckId: statusCheck.id },
@@ -325,11 +331,13 @@ export class OutageWorkflow {
     });
 
     if (target.exhausted) {
-      const risk = evaluateRisk({ safetyTime: impactCase.safetyTime, allGuardiansUnavailable: true, policy: this.riskPolicy });
-      impactCase.riskLevel = risk.level;
-      impactCase.riskReason = risk.reason;
-      impactCase.policyId = risk.policyId;
-      impactCase.policyVersion = risk.policyVersion;
+      if (!preserveRisk) {
+        const risk = evaluateRisk({ safetyTime: impactCase.safetyTime, allGuardiansUnavailable: true, policy: this.riskPolicy });
+        impactCase.riskLevel = risk.level;
+        impactCase.riskReason = risk.reason;
+        impactCase.policyId = risk.policyId;
+        impactCase.policyVersion = risk.policyVersion;
+      }
       impactCase.updatedAt = new Date(now).toISOString();
       const institutionResult = await this.#notifyInstitution({ outage, impactCase, patient, escalationRound: target.nextEscalationRound, now });
       if (!institutionResult.sent) {

@@ -1,8 +1,8 @@
 # 백엔드 2: 코어 엔진·시뮬레이션·문자
 
-DB와 HTTP API를 소유하는 백엔드 1에서 호출할 수 있도록 외부 프레임워크 없이 만든 코어 패키지다. 모든 저장소 구현은 현재 인메모리이며, 실제 DB 트랜잭션과 영속화는 백엔드 1 어댑터에서 교체한다.
+백엔드 1이 전달한 환자·정전·응답 스냅샷을 바탕으로 안전시간, 위험도와 다음 대응을 결정하는 인프로세스 코어 패키지다. DB와 HTTP API를 소유하지 않는다. 현재 `OutageWorkflow`는 일부 문자 발송과 인메모리 작업 큐 등록을 직접 수행하며, 모든 효과를 통합된 “작업 명세”로만 반환하는 구조는 아니다.
 
-## 제공 모듈
+상세 계약은 [`docs/BACKEND_2_CONTRACT.md`](docs/BACKEND_2_CONTRACT.md)를 참고한다.
 
 - `src/core/safety-time.js`: 등록 자립시간, 검증된 보조전원, 안전 버퍼, 정전 경과시간 계산. 누락·오류 입력은 `UNKNOWN`.
 - `src/core/risk.js`: `PREPARE`, `WATCH`, `HIGH`, `CRITICAL`, `RECOVERY_CHECK` 규칙 엔진.
