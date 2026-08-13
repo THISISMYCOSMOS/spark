@@ -49,14 +49,22 @@ export class BackendAHttpClient {
     });
   }
 
+  async listPatientsByRegion(regionCode) {
+    if (!regionCode) throw new TypeError("regionCode is required");
+    return this.#request(`/api/v1/core/patients?regionCode=${encodeURIComponent(regionCode)}`, {
+      method: "GET",
+    });
+  }
+
   async createImpactCase(outageId, impactCase) {
     const known = impactCase.safetyTime?.status === "KNOWN";
     return this.#request(`/api/v1/outages/${encodeURIComponent(outageId)}/impact-cases`, {
       method: "POST",
       idempotencyKey: idempotencyKey("case", `${outageId}:${impactCase.patientId}`),
       body: {
+        id: impactCase.id,
         patient_id: impactCase.patientId,
-        status: "PREPARE",
+        status: impactCase.status,
         risk_level: impactCase.riskLevel,
         risk_policy_id: this.riskPolicyId,
         risk_policy_version: this.riskPolicyVersion,
@@ -77,14 +85,15 @@ export class BackendAHttpClient {
     });
   }
 
-  async registerStatusCheck({ caseId, purpose, token, requestedAt, providerAcceptedAt, responseDueAt, tokenExpiresAt, idempotencyKey: key }) {
+  async registerStatusCheck({ id, caseId, purpose, token, providerAcceptedAt, responseDueAt, tokenExpiresAt, idempotencyKey: key }) {
     return this.#request(`/api/v1/impact-cases/${encodeURIComponent(caseId)}/status-checks`, {
       method: "POST",
       idempotencyKey: idempotencyKey("check", key),
       body: {
+        id,
         purpose: purpose === "OUTAGE_STATUS" ? "OUTAGE_CHECK" : "RECOVERY_CHECK",
         token,
-        requested_at: requestedAt,
+        requested_at: providerAcceptedAt,
         provider_accepted_at: providerAcceptedAt,
         response_due_at: responseDueAt,
         token_expires_at: tokenExpiresAt,

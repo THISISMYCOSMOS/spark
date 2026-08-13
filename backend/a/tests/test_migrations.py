@@ -50,7 +50,7 @@ def test_sqlite_empty_database_upgrades_to_head(tmp_path):
 
     engine = create_engine(database_url)
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004_ab_contract_alignment"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004_disaster_integration"
 
 
 def test_sqlite_legacy_database_upgrades_canonical_enum_data(tmp_path):

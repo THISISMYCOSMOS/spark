@@ -14,12 +14,12 @@ export class ConnectedDisasterWorkflow {
   }
 
   async run({ pdfBytes, patientsFromBackendA, now = new Date() }) {
-    if (!Array.isArray(patientsFromBackendA)) throw new TypeError("patientsFromBackendA must be supplied by Backend A");
     const document = await parseMockDisasterPdf(pdfBytes);
     const persistedOutage = await this.backendAClient.createDisaster(document);
+    const patientSnapshots = await this.#loadPatientSnapshots(document.regionCode, patientsFromBackendA);
     const patientInterpretations = [];
     const patients = [];
-    for (const snapshot of patientsFromBackendA) {
+    for (const snapshot of patientSnapshots) {
       const interpretation = this.patientContextInterpreter
         ? await this.patientContextInterpreter.interpret(snapshot)
         : { context: buildRuleBasedPatientContext(snapshot), source: "RULE", reviewRequired: false };
@@ -28,29 +28,9 @@ export class ConnectedDisasterWorkflow {
     }
     const outage = mapBackendAOutage(persistedOutage, document);
     const prepared = this.backendBWorkflow.prepare({ outage, patients, now });
-    const persistence = [];
-    for (const impactCase of prepared.created) {
-      impactCase.status = "PREPARE";
-      const saved = await this.backendAClient.createImpactCase(outage.id, impactCase);
-      impactCase.id = saved.id;
-      impactCase.version = saved.version;
-      impactCase.updatedAt = saved.updatedAt;
-      persistence.push(saved);
-    }
+    const persistence = await this.#persistPreparedCases(outage.id, prepared.created);
     const execution = await this.backendBWorkflow.executePrepared({ outage, patients, impactCases: prepared.created, now });
-    const transitions = [];
-    for (const statusCheck of execution.statusChecks) {
-      const impactCase = prepared.created.find((item) => item.id === statusCheck.impactCaseId);
-      if (!impactCase) continue;
-      const transitioned = await this.backendAClient.transitionImpactCase({
-        caseId: impactCase.id,
-        nextStatus: "WAITING_PATIENT",
-        version: impactCase.version,
-        reason: "문자 공급자 접수 및 상태 확인 등록 완료",
-      });
-      impactCase.version = transitioned.version;
-      transitions.push(transitioned);
-    }
+    const transitions = await this.#persistStartedStatusChecks(prepared.created, execution.statusChecks);
     return {
       document,
       outage,
@@ -62,5 +42,45 @@ export class ConnectedDisasterWorkflow {
       transitions,
       ...execution,
     };
+  }
+
+  async #loadPatientSnapshots(regionCode, suppliedSnapshots) {
+    const snapshots = Array.isArray(suppliedSnapshots)
+      ? suppliedSnapshots
+      : await this.backendAClient.listPatientsByRegion(regionCode);
+    if (!Array.isArray(snapshots)) throw new TypeError("Backend A patient list response must be an array");
+    return snapshots;
+  }
+
+  async #persistPreparedCases(outageId, impactCases) {
+    const persisted = [];
+    for (const impactCase of impactCases) {
+      // 공급자 접수 전에는 환자 응답 대기 상태가 아니므로 최초 상태는 PREPARE다.
+      impactCase.status = "PREPARE";
+      const saved = await this.backendAClient.createImpactCase(outageId, impactCase);
+      impactCase.id = saved.id;
+      impactCase.version = saved.version;
+      impactCase.updatedAt = saved.updatedAt;
+      persisted.push(saved);
+    }
+    return persisted;
+  }
+
+  async #persistStartedStatusChecks(impactCases, statusChecks) {
+    const byId = new Map(impactCases.map((impactCase) => [impactCase.id, impactCase]));
+    const transitions = [];
+    for (const statusCheck of statusChecks) {
+      const impactCase = byId.get(statusCheck.impactCaseId);
+      if (!impactCase) continue;
+      const transitioned = await this.backendAClient.transitionImpactCase({
+        caseId: impactCase.id,
+        nextStatus: "WAITING_PATIENT",
+        version: impactCase.version,
+        reason: "문자 공급자 접수 및 상태 확인 등록 완료",
+      });
+      impactCase.version = transitioned.version;
+      transitions.push(transitioned);
+    }
+    return transitions;
   }
 }

@@ -9,6 +9,7 @@ from .errors import AppError
 from .api_responses import failure, success
 from .auth.router import router as auth_router
 from .outages.router import router as outages_router
+from .patients.router import core_router as core_patients_router
 from .patients.router import router as patients_router
 from .responses.router import router as responses_router
 
@@ -47,5 +48,6 @@ def health():
 
 app.include_router(auth_router)
 app.include_router(patients_router)
+app.include_router(core_patients_router)
 app.include_router(outages_router)
 app.include_router(responses_router)

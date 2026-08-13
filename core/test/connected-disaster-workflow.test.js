@@ -8,6 +8,7 @@ import {
   AiPatientContextInterpreter,
   AiResponsePlanComposer,
   BackendAHttpClient,
+  BackendAResponseTokenPort,
   ConnectedDisasterWorkflow,
   GeminiAiClient,
 } from "../src/index.js";
@@ -130,8 +131,127 @@ test("PDF부터 Backend A HTTP mock, 세 Gemini 역할, Backend B Mock SMS까지
     "/api/v1/outages/backend-a-outage-1/impact-cases",
     "/api/v1/impact-cases/backend-a-case-1/transitions",
   ]);
+  assert.equal(JSON.parse(backendARequests[1].options.body).status, "PREPARE");
+  assert.equal(JSON.parse(backendARequests[2].options.body).next_status, "WAITING_PATIENT");
   const geminiSerialized = JSON.stringify(geminiRequests);
   assert.equal(geminiSerialized.includes("김테스트"), false);
   assert.equal(geminiSerialized.includes("01012345678"), false);
   assert.equal(geminiSerialized.includes("외부 전송 금지 주소"), false);
+});
+
+test("환자 목록을 넘기지 않으면 PDF 지역 코드로 Backend A에서 조회한다", async () => {
+  const calls = [];
+  const backendAClient = {
+    async createDisaster(document) {
+      calls.push(["createDisaster", document.regionCode]);
+      return {
+        id: "outage-1",
+        mode: "TEST",
+        status: "ACTIVE",
+        regionCodes: [document.regionCode],
+        startedAt: document.startedAt,
+        expectedEndAt: document.expectedEndAt,
+      };
+    },
+    async listPatientsByRegion(regionCode) {
+      calls.push(["listPatientsByRegion", regionCode]);
+      return [];
+    },
+  };
+  const backendBWorkflow = {
+    prepare({ patients }) {
+      assert.deepEqual(patients, []);
+      return { created: [], skipped: [] };
+    },
+    async executePrepared() {
+      return { statusChecks: [] };
+    },
+  };
+  const workflow = new ConnectedDisasterWorkflow({ backendAClient, backendBWorkflow });
+  const pdfBytes = await readFile(fileURLToPath(new URL("../output/pdf/mock-disaster-alert-fire.pdf", import.meta.url)));
+
+  await workflow.run({ pdfBytes, now: "2026-08-14T00:40:00.000Z" });
+
+  assert.deepEqual(calls, [
+    ["createDisaster", "99004"],
+    ["listPatientsByRegion", "99004"],
+  ]);
+});
+
+test("Backend A 조회·저장과 Backend B 문자·상태확인을 전체 순서로 연결한다", async () => {
+  const requests = [];
+  const patientId = "30000000-0000-4000-8000-000000000001";
+  const fetchImpl = async (url, options) => {
+    const path = new URL(url).pathname;
+    const body = options.body ? JSON.parse(options.body) : null;
+    requests.push({ path, body });
+    if (path === "/api/v1/core/disasters") {
+      return response({
+        id: "40000000-0000-4000-8000-000000000001",
+        mode: "TEST",
+        status: "ACTIVE",
+        regionCodes: ["99004"],
+        startedAt: "2026-08-14T00:40:00.000Z",
+        expectedEndAt: "2026-08-14T04:00:00.000Z",
+      });
+    }
+    if (path === "/api/v1/core/patients") {
+      return response([{
+        id: patientId,
+        name: "통합환자",
+        phone: "01012345678",
+        regionCode: "99004",
+        diagnosis: "호흡기 질환",
+        powerProfile: {
+          devices: [{ deviceType: "인공호흡기", batteryRuntimeMinutes: 120, runtimeVerified: true, isEssential: true }],
+          backupPowerRuntimeMinutes: 30,
+          backupPowerVerified: true,
+          safetyMarginMinutes: 20,
+        },
+        emergencyContacts: [],
+      }]);
+    }
+    if (path.endsWith("/impact-cases")) {
+      return response({ id: body.id, version: 1, status: body.status, updatedAt: "2026-08-14T00:40:00.000Z" }, 201);
+    }
+    if (path.endsWith("/status-checks")) {
+      return response({ id: body.id, status: "PENDING" }, 201);
+    }
+    if (path.endsWith("/transitions")) {
+      return response({ id: path.split("/")[4], version: 2, status: body.next_status });
+    }
+    throw new Error(`unexpected request: ${path}`);
+  };
+  const backendAClient = new BackendAHttpClient({
+    baseUrl: "https://backend-a.test",
+    coreToken: "core-token",
+    fetchImpl,
+  });
+  const backendBWorkflow = new OutageWorkflow({
+    notificationService: new NotificationService({
+      testProvider: new MockSmsProvider({ acceptedAtFactory: () => "2026-08-14T00:40:02.000Z" }),
+    }),
+    responseLinkIssuer: new BackendAResponseTokenPort({
+      backendAClient,
+      responseBaseUrl: "https://frontend.test",
+    }),
+    jobQueue: new InMemoryJobQueue(),
+  });
+  const workflow = new ConnectedDisasterWorkflow({ backendAClient, backendBWorkflow });
+  const pdfBytes = await readFile(fileURLToPath(new URL("../output/pdf/mock-disaster-alert-fire.pdf", import.meta.url)));
+
+  const result = await workflow.run({ pdfBytes, now: "2026-08-14T00:40:00.000Z" });
+
+  assert.deepEqual(requests.map(({ path }) => path), [
+    "/api/v1/core/disasters",
+    "/api/v1/core/patients",
+    "/api/v1/outages/40000000-0000-4000-8000-000000000001/impact-cases",
+    `/api/v1/impact-cases/${result.created[0].id}/status-checks`,
+    `/api/v1/impact-cases/${result.created[0].id}/transitions`,
+  ]);
+  assert.equal(requests[2].body.status, "PREPARE");
+  assert.equal(requests[3].body.requested_at, "2026-08-14T00:40:02.000Z");
+  assert.equal(requests[3].body.provider_accepted_at, "2026-08-14T00:40:02.000Z");
+  assert.equal(requests[4].body.next_status, "WAITING_PATIENT");
+  assert.equal(result.transitions[0].status, "WAITING_PATIENT");
 });
