@@ -167,6 +167,7 @@ GET  /api/v1/outages/{outageId}/impact-cases
 GET  /api/v1/impact-cases/{caseId}
 POST /api/v1/impact-cases/{caseId}/transitions
 POST /api/v1/impact-cases/{caseId}/risk-results
+POST /api/v1/outages/{outageId}/close
 ```
 
 정전 관리에는 `INSTITUTION_ADMIN`, 대응 건 생성·상태 전환·위험 결과 저장에는 `CORE_ENGINE` JWT가 필요합니다. 해당 토큰 발급은 기관 인증 계층과 백엔드 2 연동 영역이며 이 모듈은 역할을 검증합니다. 모든 변경 요청에는 8~100자의 `Idempotency-Key` 헤더가 필요합니다.
@@ -181,19 +182,8 @@ name: DEMO_ONLY_DEFAULT
 
 업무 상태와 위험도는 서로 독립적으로 저장됩니다. `/transitions`는 업무 상태만, `/risk-results`는 위험도와 계산 근거만 변경합니다.
 
-허용되는 대응 상태 전환:
-
-```text
-PREPARE -> WAITING_PATIENT | ACTION_REQUIRED | RECOVERY_CHECK
-WAITING_PATIENT -> MONITORING | ACTION_REQUIRED | RECOVERY_CHECK
-MONITORING -> WAITING_PATIENT | ACTION_REQUIRED | RECOVERY_CHECK
-ACTION_REQUIRED -> GUARDIAN_ACTING | RECOVERY_CHECK
-GUARDIAN_ACTING -> MONITORING | ACTION_REQUIRED | RECOVERY_CHECK
-RECOVERY_CHECK -> ACTION_REQUIRED | GUARDIAN_ACTING
-CLOSED -> 전환 없음
-```
-
-`RECOVERY_CHECK → CLOSED`는 일반 상태 전환 API에서 허용하지 않습니다. 가정 전력과 의료기기가 모두 정상이라는 `RecoveryConfirmation`이 저장될 때만 복구 서비스가 종료합니다.
+대응 상태 전환과 종료 가능 여부는 백엔드 2가 결정합니다. 백엔드 A의 `/transitions`와 `/close`는 `CORE_ENGINE`이 전달한 결정을 optimistic lock과 DB 무결성 검증 후 저장합니다. 이미 `CLOSED`인 대응 건이나 정전은 다시 전이하지 않습니다.
+`CLOSED` 명령은 대응 건이 `RECOVERY_CHECK`, 정전이 `RECOVERY_REPORTED`인 경우에만 저장합니다. 이는 종료 가능 여부를 재계산하는 것이 아니라 명백히 잘못된 command 저장을 막는 최소 invariant입니다. Backend B가 생성한 canonical UUID는 ImpactCase와 StatusCheck 생성 요청의 `id`로 받아 A의 PK에 그대로 저장합니다.
 
 ### 응답·보호자 행동·복구 API
 
@@ -208,12 +198,14 @@ POST /api/v1/impact-cases/{caseId}/recovery-confirmations
 
 - 백엔드 2가 생성한 일회성 토큰과 SMS 공급자 접수 시각을 `status-checks`에 등록합니다.
 - DB에는 토큰 원문 대신 `RESPONSE_TOKEN_PEPPER` 기반 HMAC만 저장합니다.
-- 응답 제한 시간은 공급자 접수 시각 이후여야 하며 초 단위 값을 지원합니다.
+- canonical purpose는 `OUTAGE_STATUS`, `RECOVERY_CONFIRMATION`입니다.
+- canonical 환자 응답은 `NORMAL`, `NEED_HELP`, `EQUIPMENT_ISSUE`입니다.
+- legacy 입력 `OUTAGE_CHECK`, purpose의 `RECOVERY_CHECK`, 환자 응답 `OK`는 입력 계층에서만 canonical 값으로 변환하며 DB와 응답에는 canonical 값만 사용합니다.
+- `requested_at = provider_accepted_at`, `token_expires_at = response_due_at`을 저장 계약으로 검증합니다.
 - 무응답은 `StatusCheck.TIMED_OUT`으로만 기록하고 `PatientResponse`를 만들지 않습니다.
 - 공개 URL과 응답에는 환자 상세 개인정보를 포함하지 않습니다.
-- 지역 복구는 정전을 `RECOVERY_REPORTED`, 모든 미종료 대응 건을 `RECOVERY_CHECK`로 바꾸며 위험도를 유지합니다.
-- `homePowerRestored=true`와 `deviceOperatingNormally=true`가 모두 충족되어야 개별 대응 건이 종료됩니다.
-- 모든 대응 건이 종료된 후에만 정전이 `CLOSED`가 됩니다.
+- 지역 복구 API는 정전의 `RECOVERY_REPORTED` 사실만 저장합니다. 어떤 대응 건을 `RECOVERY_CHECK`로 보낼지는 백엔드 2가 결정합니다.
+- 복구 응답 API는 확인 스냅샷만 저장합니다. 대응 건과 정전의 종료 가능 여부는 백엔드 2가 결정하고 CORE_ENGINE 저장 API로 반영합니다.
 
 SMS 전송, 연락 대상 선택, 재시도, 문자 중복 방지, 타임아웃 스케줄 실행은 백엔드 2가 담당합니다. 이 모듈은 공급자 접수 이후의 확인 데이터와 결과를 저장합니다.
 

@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship as orm_relationship
 
 from .database import Base
@@ -68,8 +68,8 @@ class RiskLevel(str, enum.Enum):
 
 
 class StatusCheckPurpose(str, enum.Enum):
-    OUTAGE_CHECK = "OUTAGE_CHECK"
-    RECOVERY_CHECK = "RECOVERY_CHECK"
+    OUTAGE_STATUS = "OUTAGE_STATUS"
+    RECOVERY_CONFIRMATION = "RECOVERY_CONFIRMATION"
 
 
 class StatusCheckStatus(str, enum.Enum):
@@ -80,7 +80,7 @@ class StatusCheckStatus(str, enum.Enum):
 
 
 class PatientResponseType(str, enum.Enum):
-    OK = "OK"
+    NORMAL = "NORMAL"
     NEED_HELP = "NEED_HELP"
     EQUIPMENT_ISSUE = "EQUIPMENT_ISSUE"
 
@@ -296,10 +296,10 @@ class ImpactCase(Base):
     outage_id: Mapped[str] = mapped_column(ForeignKey("outage_events.id"), nullable=False)
     patient_id: Mapped[str] = mapped_column(ForeignKey("patients.id"), nullable=False)
     status: Mapped[ImpactCaseStatus] = mapped_column(Enum(ImpactCaseStatus), nullable=False)
-    risk_level: Mapped[RiskLevel] = mapped_column(Enum(RiskLevel), nullable=False)
+    risk_level: Mapped[RiskLevel | None] = mapped_column(Enum(RiskLevel), nullable=True)
     risk_policy_id: Mapped[str] = mapped_column(ForeignKey("risk_policies.id"), nullable=False)
     risk_policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    effective_runtime_minutes: Mapped[int | None] = mapped_column(Integer)
+    effective_runtime_minutes: Mapped[float | None] = mapped_column(Float)
     runtime_unknown_reason: Mapped[str | None] = mapped_column(String(500))
     response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     risk_calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

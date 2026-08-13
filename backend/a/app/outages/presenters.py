@@ -33,7 +33,7 @@ def impact_case_view(case: ImpactCase) -> dict:
         "outageId": case.outage_id,
         "patientId": case.patient_id,
         "status": case.status.value,
-        "riskLevel": case.risk_level.value,
+        "riskLevel": case.risk_level.value if case.risk_level else None,
         "riskPolicyId": case.risk_policy_id,
         "riskPolicyVersion": case.risk_policy_version,
         "effectiveRuntimeMinutes": case.effective_runtime_minutes,

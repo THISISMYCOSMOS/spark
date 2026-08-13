@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -31,16 +31,22 @@ class ResponseService:
         case = self._case(case_id)
         if case.status == ImpactCaseStatus.CLOSED:
             raise ConflictError("IMPACT_CASE_CLOSED", "종료된 대응 건에는 상태 확인을 생성할 수 없습니다.")
-        if body.purpose == StatusCheckPurpose.RECOVERY_CHECK and case.status != ImpactCaseStatus.RECOVERY_CHECK:
+        if self.db.get(StatusCheck, body.id) is not None:
+            raise ConflictError("STATUS_CHECK_ID_ALREADY_EXISTS", "동일한 상태 확인 ID가 이미 존재합니다.")
+        if body.purpose == StatusCheckPurpose.RECOVERY_CONFIRMATION and case.status != ImpactCaseStatus.RECOVERY_CHECK:
             raise ConflictError("INVALID_CHECK_PURPOSE", "복구 확인은 RECOVERY_CHECK 상태에서만 생성할 수 있습니다.")
         check = StatusCheck(
-            impact_case_id=case_id, purpose=body.purpose, token_digest=digest_response_token(body.token),
+            id=body.id, impact_case_id=case_id, purpose=body.purpose, token_digest=digest_response_token(body.token),
             requested_at=body.requested_at, provider_accepted_at=body.provider_accepted_at,
             response_due_at=body.response_due_at, token_expires_at=body.token_expires_at,
             status=StatusCheckStatus.PENDING,
         )
         self.db.add(check)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ConflictError("STATUS_CHECK_CREATE_CONFLICT", "상태 확인 ID 또는 토큰이 중복되었습니다.") from exc
         self._audit("StatusCheck", check.id, AuditAction.CREATED, actor_id, UserRole.CORE_ENGINE, "공급자 접수 완료 후 상태 확인 등록", None, self._check_view(check))
         self._commit("STATUS_CHECK_CREATE_CONFLICT", "상태 확인 또는 토큰이 중복되었습니다.")
         return self._check_view(check)
@@ -50,8 +56,6 @@ class ResponseService:
         self._version(check.version, body.version)
         if check.status != StatusCheckStatus.PENDING:
             raise ConflictError("STATUS_CHECK_NOT_PENDING", "대기 중인 상태 확인만 시간 초과 처리할 수 있습니다.")
-        if as_utc(body.timed_out_at) < as_utc(check.response_due_at):
-            raise ConflictError("TIMEOUT_NOT_DUE", "응답 제한 시각 이전에는 시간 초과 처리할 수 없습니다.")
         before = self._check_view(check)
         check.status, check.timed_out_at, check.version = StatusCheckStatus.TIMED_OUT, body.timed_out_at, check.version + 1
         self._audit("StatusCheck", check.id, AuditAction.STATE_CHANGED, actor_id, UserRole.CORE_ENGINE, body.reason, before, self._check_view(check))
@@ -66,14 +70,10 @@ class ResponseService:
             raise GoneError("CHECK_IN_TOKEN_ALREADY_USED", "이미 사용되었거나 종료된 응답 토큰입니다.")
         now = datetime.now(timezone.utc)
         check_before = self._check_view(check)
-        if now > as_utc(check.token_expires_at) or now > as_utc(check.response_due_at):
-            check.status, check.timed_out_at, check.version = StatusCheckStatus.TIMED_OUT, now, check.version + 1
-            case = self._case(check.impact_case_id)
-            self._audit("StatusCheck", check.id, AuditAction.STATE_CHANGED, case.patient_id, UserRole.PATIENT, "응답 기한 만료", check_before, self._check_view(check))
-            self.db.commit()
+        if now > as_utc(check.token_expires_at):
             raise GoneError("CHECK_IN_TOKEN_EXPIRED", "응답 토큰의 유효 시간이 만료되었습니다.")
         case = self._case(check.impact_case_id)
-        if check.purpose == StatusCheckPurpose.OUTAGE_CHECK:
+        if check.purpose == StatusCheckPurpose.OUTAGE_STATUS:
             if body.response_type is None or body.home_power_restored is not None or body.device_operating_normally is not None:
                 raise ConflictError("RESPONSE_BODY_MISMATCH", "정전 상태 확인에는 responseType이 필요합니다.")
             response = PatientResponse(status_check_id=check.id, response_type=body.response_type, note=body.note, responded_at=now)
@@ -90,8 +90,7 @@ class ResponseService:
                 reason=body.note or "환자 공개 복구 응답", confirmed_at=now,
             )
             self.db.add(confirmation)
-            closed = self._apply_recovery_result(case, body.home_power_restored, body.device_operating_normally, case.patient_id, UserRole.PATIENT, body.note or "환자 공개 복구 응답")
-            result = {"statusCheckId": check.id, "purpose": check.purpose.value, "homePowerRestored": body.home_power_restored, "deviceOperatingNormally": body.device_operating_normally, "caseClosed": closed, "acceptedAt": now.isoformat()}
+            result = {"statusCheckId": check.id, "purpose": check.purpose.value, "homePowerRestored": body.home_power_restored, "deviceOperatingNormally": body.device_operating_normally, "caseClosed": False, "decisionPending": True, "acceptedAt": now.isoformat()}
         check.status, check.responded_at, check.version = StatusCheckStatus.RESPONDED, now, check.version + 1
         self._audit("StatusCheck", check.id, AuditAction.STATE_CHANGED, case.patient_id, UserRole.PATIENT, "환자 공개 응답", check_before, self._check_view(check))
         self._commit("CHECK_IN_RESPONSE_CONFLICT", "응답이 동시에 처리되었습니다.")
@@ -125,16 +124,15 @@ class ResponseService:
         if role not in {UserRole.GUARDIAN, UserRole.INSTITUTION_ADMIN}:
             raise ForbiddenError("ROLE_REQUIRED", "보호자 또는 기관 관리자 역할이 필요합니다.")
         if case.status != ImpactCaseStatus.RECOVERY_CHECK:
-            raise ConflictError("INVALID_STATE_TRANSITION", "RECOVERY_CHECK 상태에서만 복구 확인할 수 있습니다.")
+            raise ConflictError("RECOVERY_CONFIRMATION_NOT_ALLOWED", "RECOVERY_CHECK 상태에서만 복구 확인을 저장할 수 있습니다.")
         confirmation = RecoveryConfirmation(
             impact_case_id=case.id, home_power_restored=body.home_power_restored,
             device_operating_normally=body.device_operating_normally,
             confirmed_by_id=actor_id, confirmed_by_role=role, reason=body.reason,
         )
         self.db.add(confirmation)
-        closed = self._apply_recovery_result(case, body.home_power_restored, body.device_operating_normally, actor_id, role, body.reason)
         self.db.flush()
-        result = self._recovery_view(confirmation) | {"caseClosed": closed}
+        result = self._recovery_view(confirmation) | {"caseClosed": False, "decisionPending": True}
         self._audit("RecoveryConfirmation", confirmation.id, AuditAction.CREATED, actor_id, role, body.reason, None, result)
         self._commit("RECOVERY_CONFIRMATION_CONFLICT", "복구 확인 저장이 충돌했습니다.")
         return result
@@ -149,33 +147,9 @@ class ResponseService:
         outage.status, outage.recovery_reported_at, outage.recovery_source = OutageStatus.RECOVERY_REPORTED, body.recovered_at, body.source
         outage.version += 1
         self.db.add(OutageEventHistory(outage_id=outage.id, previous_status=OutageStatus.ACTIVE, next_status=OutageStatus.RECOVERY_REPORTED, actor_id=actor_id, actor_role=UserRole.INSTITUTION_ADMIN, reason=body.reason, occurred_at=body.recovered_at))
-        cases = list(self.db.scalars(select(ImpactCase).where(ImpactCase.outage_id == outage.id, ImpactCase.status != ImpactCaseStatus.CLOSED)))
-        for case in cases:
-            case_before = impact_case_view(case)
-            case.status, case.version = ImpactCaseStatus.RECOVERY_CHECK, case.version + 1
-            self._audit("ImpactCase", case.id, AuditAction.STATE_CHANGED, actor_id, UserRole.INSTITUTION_ADMIN, body.reason, case_before, impact_case_view(case))
         self._audit("OutageEvent", outage.id, AuditAction.STATE_CHANGED, actor_id, UserRole.INSTITUTION_ADMIN, body.reason, before, outage_view(outage))
         self._commit("OUTAGE_RECOVERY_CONFLICT", "지역 복구 등록이 충돌했습니다.")
-        return outage_view(outage) | {"recoveryCheckCaseCount": len(cases)}
-
-    def _apply_recovery_result(self, case, home, device, actor_id, role, reason) -> bool:
-        if case.status != ImpactCaseStatus.RECOVERY_CHECK:
-            raise ConflictError("INVALID_STATE_TRANSITION", "RECOVERY_CHECK 상태에서만 종료할 수 있습니다.")
-        if not (home and device): return False
-        before = impact_case_view(case)
-        case.status, case.version = ImpactCaseStatus.CLOSED, case.version + 1
-        self._audit("ImpactCase", case.id, AuditAction.STATE_CHANGED, actor_id, role, reason, before, impact_case_view(case))
-        self.db.flush()
-        remaining = self.db.scalar(select(func.count(ImpactCase.id)).where(ImpactCase.outage_id == case.outage_id, ImpactCase.status != ImpactCaseStatus.CLOSED))
-        if remaining == 0:
-            outage = self.db.get(OutageEvent, case.outage_id)
-            if outage.status != OutageStatus.RECOVERY_REPORTED:
-                raise ConflictError("OUTAGE_NOT_RECOVERY_REPORTED", "지역 복구 등록 전에는 정전을 종료할 수 없습니다.")
-            before_outage = outage_view(outage)
-            outage.status, outage.version = OutageStatus.CLOSED, outage.version + 1
-            self.db.add(OutageEventHistory(outage_id=outage.id, previous_status=OutageStatus.RECOVERY_REPORTED, next_status=OutageStatus.CLOSED, actor_id=actor_id, actor_role=role, reason="모든 환자 대응 건 종료"))
-            self._audit("OutageEvent", outage.id, AuditAction.STATE_CHANGED, actor_id, role, "모든 환자 대응 건 종료", before_outage, outage_view(outage))
-        return True
+        return outage_view(outage) | {"recoveryDecisionPending": True}
 
     def _case(self, case_id):
         value = self.db.get(ImpactCase, case_id)

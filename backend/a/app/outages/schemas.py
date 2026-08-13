@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -9,6 +10,13 @@ def ensure_aware(value: datetime | None) -> datetime | None:
     if value is not None and value.tzinfo is None:
         raise ValueError("시간에는 UTC 오프셋이 포함되어야 합니다.")
     return value
+
+
+def canonical_uuid(value) -> str:
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("canonical UUID 형식이어야 합니다.") from exc
 
 
 class OutageCreateRequest(BaseModel):
@@ -103,12 +111,13 @@ class StateChangeRequest(BaseModel):
 
 
 class ImpactCaseCreateRequest(BaseModel):
+    id: str = Field(min_length=36, max_length=36)
     patient_id: str = Field(min_length=36, max_length=36)
     status: ImpactCaseStatus
-    risk_level: RiskLevel
+    risk_level: RiskLevel | None = None
     risk_policy_id: str = Field(min_length=36, max_length=36)
     risk_policy_version: int = Field(ge=1)
-    effective_runtime_minutes: int | None = Field(default=None, ge=0, le=525_600)
+    effective_runtime_minutes: float | None = Field(default=None, ge=0, le=525_600)
     runtime_unknown_reason: str | None = Field(default=None, max_length=500)
     response_due_at: datetime | None = None
     risk_calculated_at: datetime
@@ -119,18 +128,10 @@ class ImpactCaseCreateRequest(BaseModel):
     def aware_time(cls, value):
         return ensure_aware(value)
 
-    @model_validator(mode="after")
-    def runtime_consistency(self):
-        if self.effective_runtime_minutes is None and not self.runtime_unknown_reason:
-            raise ValueError("자립시간 UNKNOWN 사유가 필요합니다.")
-        if self.effective_runtime_minutes is not None and self.runtime_unknown_reason:
-            raise ValueError("자립시간 값과 UNKNOWN 사유를 동시에 입력할 수 없습니다.")
-        if self.effective_runtime_minutes is None and self.risk_level == RiskLevel.WATCH:
-            raise ValueError("자립시간 UNKNOWN의 위험도는 최소 HIGH여야 합니다.")
-        if self.effective_runtime_minutes == 0 and self.risk_level != RiskLevel.CRITICAL:
-            raise ValueError("유효 자립시간이 0이면 위험도는 CRITICAL이어야 합니다.")
-        return self
-
+    @field_validator("id", mode="before")
+    @classmethod
+    def valid_id(cls, value):
+        return canonical_uuid(value)
 
 class ImpactCaseTransitionRequest(BaseModel):
     next_status: ImpactCaseStatus
@@ -139,27 +140,44 @@ class ImpactCaseTransitionRequest(BaseModel):
 
 
 class RiskResultRequest(BaseModel):
+    policy_id: str = Field(min_length=36, max_length=36)
+    policy_version: int = Field(ge=1)
     risk_level: RiskLevel
-    effective_runtime_minutes: int | None = Field(default=None, ge=0, le=525_600)
+    effective_runtime_minutes: float | None = Field(default=None, ge=0, le=525_600)
     runtime_unknown_reason: str | None = Field(default=None, max_length=500)
     response_due_at: datetime | None = None
     risk_calculated_at: datetime
     risk_reason: str = Field(min_length=1, max_length=1000)
     version: int = Field(ge=1)
 
+    @model_validator(mode="before")
+    @classmethod
+    def canonical_policy_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "policy_id" not in normalized and "policyId" in normalized:
+            normalized["policy_id"] = normalized["policyId"]
+        if "policy_version" not in normalized and "policyVersion" in normalized:
+            normalized["policy_version"] = normalized["policyVersion"]
+        return normalized
+
     @field_validator("response_due_at", "risk_calculated_at")
     @classmethod
     def aware_time(cls, value):
         return ensure_aware(value)
 
-    @model_validator(mode="after")
-    def runtime_consistency(self):
-        if self.effective_runtime_minutes is None and not self.runtime_unknown_reason:
-            raise ValueError("자립시간 UNKNOWN 사유가 필요합니다.")
-        if self.effective_runtime_minutes is not None and self.runtime_unknown_reason:
-            raise ValueError("자립시간 값과 UNKNOWN 사유를 동시에 입력할 수 없습니다.")
-        if self.effective_runtime_minutes is None and self.risk_level == RiskLevel.WATCH:
-            raise ValueError("자립시간 UNKNOWN의 위험도는 최소 HIGH여야 합니다.")
-        if self.effective_runtime_minutes == 0 and self.risk_level != RiskLevel.CRITICAL:
-            raise ValueError("유효 자립시간이 0이면 위험도는 CRITICAL이어야 합니다.")
-        return self
+    @field_validator("policy_id", mode="before")
+    @classmethod
+    def valid_policy_id(cls, value):
+        return canonical_uuid(value)
+
+class OutageCloseRequest(BaseModel):
+    version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=500)
+    occurred_at: datetime | None = None
+
+    @field_validator("occurred_at")
+    @classmethod
+    def aware_time(cls, value):
+        return ensure_aware(value)

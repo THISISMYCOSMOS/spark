@@ -5,7 +5,7 @@ from ..dependencies import current_identity
 from ..authorization import require_any_role, require_role
 from ..models import UserRole
 from ..idempotency import execute_idempotent
-from .schemas import CoreDisasterCreateRequest, ImpactCaseCreateRequest, ImpactCaseTransitionRequest, OutageCreateRequest, OutageUpdateRequest, RiskResultRequest, StateChangeRequest
+from .schemas import CoreDisasterCreateRequest, ImpactCaseCreateRequest, ImpactCaseTransitionRequest, OutageCloseRequest, OutageCreateRequest, OutageUpdateRequest, RiskResultRequest, StateChangeRequest
 from .service import OutageService
 from ..api_responses import success
 
@@ -81,3 +81,9 @@ def transition_case(case_id: str, body: ImpactCaseTransitionRequest, identity=De
 def save_risk(case_id: str, body: RiskResultRequest, identity=Depends(current_identity), svc=Depends(service), idempotency_key: str = Header(min_length=8, max_length=100)):
     actor = require_role(identity, UserRole.CORE_ENGINE)
     return success(execute_idempotent(svc.db, actor, f"POST:/impact-cases/{case_id}/risk-results", idempotency_key, body, lambda: svc.save_risk_result(actor, case_id, body)))
+
+
+@router.post("/api/v1/outages/{outage_id}/close")
+def close_outage(outage_id: str, body: OutageCloseRequest, identity=Depends(current_identity), svc=Depends(service), idempotency_key: str = Header(min_length=8, max_length=100)):
+    actor = require_role(identity, UserRole.CORE_ENGINE)
+    return success(execute_idempotent(svc.db, actor, f"POST:/outages/{outage_id}/close", idempotency_key, body, lambda: svc.close_outage(actor, outage_id, body)))

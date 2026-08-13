@@ -11,18 +11,7 @@ from ..models import (
 from ..audit_repository import AuditLogRepository
 from .presenters import impact_case_view, outage_view
 from .repositories import ImpactCaseRepository, OutageRepository, PatientExistenceRepository, RiskPolicyRepository
-from .schemas import ImpactCaseCreateRequest, ImpactCaseTransitionRequest, OutageCreateRequest, OutageUpdateRequest, RiskResultRequest, StateChangeRequest
-
-
-CASE_TRANSITIONS = {
-    ImpactCaseStatus.PREPARE: {ImpactCaseStatus.WAITING_PATIENT, ImpactCaseStatus.ACTION_REQUIRED, ImpactCaseStatus.RECOVERY_CHECK},
-    ImpactCaseStatus.WAITING_PATIENT: {ImpactCaseStatus.MONITORING, ImpactCaseStatus.ACTION_REQUIRED, ImpactCaseStatus.RECOVERY_CHECK},
-    ImpactCaseStatus.MONITORING: {ImpactCaseStatus.WAITING_PATIENT, ImpactCaseStatus.ACTION_REQUIRED, ImpactCaseStatus.RECOVERY_CHECK},
-    ImpactCaseStatus.ACTION_REQUIRED: {ImpactCaseStatus.GUARDIAN_ACTING, ImpactCaseStatus.RECOVERY_CHECK},
-    ImpactCaseStatus.GUARDIAN_ACTING: {ImpactCaseStatus.MONITORING, ImpactCaseStatus.ACTION_REQUIRED, ImpactCaseStatus.RECOVERY_CHECK},
-    ImpactCaseStatus.RECOVERY_CHECK: {ImpactCaseStatus.ACTION_REQUIRED, ImpactCaseStatus.GUARDIAN_ACTING},
-    ImpactCaseStatus.CLOSED: set(),
-}
+from .schemas import ImpactCaseCreateRequest, ImpactCaseTransitionRequest, OutageCloseRequest, OutageCreateRequest, OutageUpdateRequest, RiskResultRequest, StateChangeRequest
 
 
 class OutageService:
@@ -76,21 +65,25 @@ class OutageService:
         if outage.status != OutageStatus.SCHEDULED:
             raise ConflictError("INVALID_STATE_TRANSITION", "SCHEDULED 정전만 시작할 수 있습니다.")
         self._version(outage.version, body.version)
-        return self._change_outage_status(outage, OutageStatus.ACTIVE, actor_id, body.reason, body.occurred_at)
+        return self._change_outage_status(outage, OutageStatus.ACTIVE, actor_id, UserRole.INSTITUTION_ADMIN, body.reason, body.occurred_at)
 
     def cancel(self, actor_id: str, outage_id: str, body: StateChangeRequest) -> dict:
         outage = self._outage(outage_id)
         if outage.status != OutageStatus.SCHEDULED:
             raise ConflictError("INVALID_STATE_TRANSITION", "시작 전 SCHEDULED 정전만 취소할 수 있습니다.")
         self._version(outage.version, body.version)
-        return self._change_outage_status(outage, OutageStatus.CANCELLED, actor_id, body.reason, body.occurred_at)
+        return self._change_outage_status(outage, OutageStatus.CANCELLED, actor_id, UserRole.INSTITUTION_ADMIN, body.reason, body.occurred_at)
 
     def create_case(self, actor_id: str, outage_id: str, body: ImpactCaseCreateRequest) -> dict:
         outage = self._outage(outage_id)
         if outage.status not in {OutageStatus.SCHEDULED, OutageStatus.ACTIVE}:
             raise ConflictError("INVALID_OUTAGE_STATE", "현재 정전 상태에서는 대응 건을 생성할 수 없습니다.")
+        if body.status == ImpactCaseStatus.CLOSED:
+            raise ConflictError("INVALID_INITIAL_CASE_STATUS", "종료 상태의 대응 건을 직접 생성할 수 없습니다.")
         if self.cases.exists(outage_id, body.patient_id):
             raise ConflictError("IMPACT_CASE_ALREADY_EXISTS", "동일 정전과 환자의 대응 건이 이미 존재합니다.")
+        if self.cases.find(body.id) is not None:
+            raise ConflictError("IMPACT_CASE_ID_ALREADY_EXISTS", "동일한 대응 건 ID가 이미 존재합니다.")
         if not self.patients.active_exists(body.patient_id):
             raise NotFoundError("PATIENT_NOT_FOUND", "환자를 찾을 수 없습니다.")
         policy = self.policies.find(body.risk_policy_id)
@@ -102,7 +95,11 @@ class OutageService:
             raise ConflictError("INVALID_INITIAL_CASE_STATUS", "예고 정전의 최초 대응 상태는 PREPARE여야 합니다.")
         case = ImpactCase(outage_id=outage_id, **body.model_dump())
         self.cases.add(case)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ConflictError("IMPACT_CASE_CREATE_CONFLICT", "대응 건 ID 또는 저장 제약이 충돌했습니다.") from exc
         after = impact_case_view(case)
         self._audit(case, AuditAction.CREATED, actor_id, UserRole.CORE_ENGINE, body.risk_reason, None, after)
         self._commit("IMPACT_CASE_CREATE_CONFLICT", "대응 건 생성이 충돌했습니다.")
@@ -118,8 +115,10 @@ class OutageService:
     def transition_case(self, actor_id: str, case_id: str, body: ImpactCaseTransitionRequest) -> dict:
         case = self._case(case_id)
         self._version(case.version, body.version)
-        if body.next_status not in CASE_TRANSITIONS[case.status]:
-            raise ConflictError("INVALID_STATE_TRANSITION", "허용되지 않은 환자 대응 상태 전환입니다.")
+        if case.status == ImpactCaseStatus.CLOSED:
+            raise ConflictError("IMPACT_CASE_CLOSED", "종료된 대응 건은 다시 전이할 수 없습니다.")
+        if body.next_status == ImpactCaseStatus.CLOSED and case.status != ImpactCaseStatus.RECOVERY_CHECK:
+            raise ConflictError("IMPACT_CASE_NOT_READY_TO_CLOSE", "RECOVERY_CHECK 상태의 대응 건만 종료 명령을 저장할 수 있습니다.")
         before = impact_case_view(case)
         case.status = body.next_status
         case.version += 1
@@ -127,12 +126,30 @@ class OutageService:
         self._commit("IMPACT_CASE_UPDATE_CONFLICT", "대응 상태 변경이 충돌했습니다.")
         return impact_case_view(case)
 
+    def close_outage(self, actor_id: str, outage_id: str, body: OutageCloseRequest) -> dict:
+        outage = self._outage(outage_id)
+        self._version(outage.version, body.version)
+        if outage.status == OutageStatus.CLOSED:
+            raise ConflictError("OUTAGE_ALREADY_CLOSED", "이미 종료된 정전입니다.")
+        if outage.status != OutageStatus.RECOVERY_REPORTED:
+            raise ConflictError("OUTAGE_NOT_RECOVERY_REPORTED", "RECOVERY_REPORTED 상태의 정전만 종료 명령을 저장할 수 있습니다.")
+        return self._change_outage_status(outage, OutageStatus.CLOSED, actor_id, UserRole.CORE_ENGINE, body.reason, body.occurred_at)
+
     def save_risk_result(self, actor_id: str, case_id: str, body: RiskResultRequest) -> dict:
         case = self._case(case_id)
         if case.status == ImpactCaseStatus.CLOSED:
             raise ConflictError("IMPACT_CASE_CLOSED", "종료된 대응 건의 위험도를 변경할 수 없습니다.")
         self._version(case.version, body.version)
+        policy = self.policies.find(body.policy_id)
+        if policy is None:
+            raise ConflictError("RISK_POLICY_NOT_FOUND", "위험 정책을 찾을 수 없습니다.")
+        if policy.version != body.policy_version:
+            raise ConflictError("RISK_POLICY_VERSION_MISMATCH", "위험 정책과 버전이 일치하지 않습니다.")
+        if case.risk_policy_id != body.policy_id or case.risk_policy_version != body.policy_version:
+            raise ConflictError("IMPACT_CASE_POLICY_MISMATCH", "대응 건의 위험 정책 스냅샷과 결과 정책이 일치하지 않습니다.")
         before = impact_case_view(case)
+        case.risk_policy_id = body.policy_id
+        case.risk_policy_version = body.policy_version
         case.risk_level = body.risk_level
         case.effective_runtime_minutes = body.effective_runtime_minutes
         case.runtime_unknown_reason = body.runtime_unknown_reason
@@ -144,14 +161,14 @@ class OutageService:
         self._commit("IMPACT_CASE_UPDATE_CONFLICT", "위험도 결과 저장이 충돌했습니다.")
         return impact_case_view(case)
 
-    def _change_outage_status(self, outage, next_status, actor_id, reason, occurred_at):
+    def _change_outage_status(self, outage, next_status, actor_id, actor_role, reason, occurred_at):
         before, previous = outage_view(outage), outage.status
         outage.status, outage.version = next_status, outage.version + 1
         when = occurred_at or datetime.now(timezone.utc)
         if next_status == OutageStatus.ACTIVE: outage.started_at = when
         if next_status == OutageStatus.CANCELLED: outage.cancelled_at = when
-        self._history(outage, previous, next_status, actor_id, UserRole.INSTITUTION_ADMIN, reason, when)
-        self._audit(outage, AuditAction.STATE_CHANGED, actor_id, UserRole.INSTITUTION_ADMIN, reason, before, outage_view(outage))
+        self._history(outage, previous, next_status, actor_id, actor_role, reason, when)
+        self._audit(outage, AuditAction.STATE_CHANGED, actor_id, actor_role, reason, before, outage_view(outage))
         self._commit("OUTAGE_STATE_CONFLICT", "정전 상태 변경이 충돌했습니다.")
         return outage_view(outage)
 
