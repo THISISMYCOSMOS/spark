@@ -58,6 +58,7 @@ export type GuardianJoinData = {
 export type GuardianContextValue = GuardianJoinData & {
   /** 환자에게 알려줄 여섯 자리 코드 */
   patientCode: string;
+  setPatientCode: (code: string) => void;
   regenerateCode: () => void;
   autonomySeconds: number;
   autonomyText: string;
@@ -244,6 +245,7 @@ export function GuardianProvider({ children }: { children: ReactNode }) {
     () => ({
       ...data,
       patientCode,
+      setPatientCode,
       regenerateCode,
       autonomySeconds,
       autonomyText,
@@ -266,6 +268,7 @@ export function GuardianProvider({ children }: { children: ReactNode }) {
     [
       data,
       patientCode,
+      setPatientCode,
       regenerateCode,
       autonomySeconds,
       autonomyText,

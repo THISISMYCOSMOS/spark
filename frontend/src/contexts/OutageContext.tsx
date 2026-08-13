@@ -9,6 +9,9 @@ import {
 } from "react";
 
 import { autonomy, escalationSeconds as baseEscalationSeconds } from "@/data/mock";
+import { ApiError, getActiveRole, isRealApiMode } from "@/lib/api/client";
+import { getCurrentImpactCase, submitPatientResponse } from "@/lib/api/outages";
+import type { CurrentImpactCaseView } from "@/lib/api/types";
 
 /** 정전 상태 모양 */
 export type PatientAnswer = "none" | "ok" | "guardian" | "call";
@@ -95,12 +98,14 @@ export const defaultDemo: DemoSettings = {
 
 interface OutageContextValue {
   outage: OutageState;
+  currentImpactCase: CurrentImpactCaseView | null;
   /** 정전 발생: mode를 'outage'로 바꾸고 값을 채웁니다 */
   sendOutage: (payload?: OutagePayload) => void;
   /** 정전 종료: mode를 'calm'으로 되돌리고 값을 비웁니다 */
   endOutage: () => void;
   /** 환자 응답을 공유합니다 */
   setPatientAnswer: (answer: PatientAnswer) => void;
+  submitPatientAnswer: (answer: Exclude<PatientAnswer, "none">) => Promise<void>;
   /** 시연용 설정 (환자·보호자·관리자 화면이 함께 씁니다) */
   demo: DemoSettings;
   shortenEscalation: () => void;
@@ -113,6 +118,7 @@ const OutageContext = createContext<OutageContextValue | null>(null);
 
 export function OutageProvider({ children }: { children: ReactNode }) {
   const [outage, setOutage] = useState<OutageState>(calmState);
+  const [currentImpactCase, setCurrentImpactCase] = useState<CurrentImpactCaseView | null>(null);
   const [demo, setDemo] = useState<DemoSettings>(defaultDemo);
 
   const channelRef = useRef<BroadcastChannel | null>(null);
@@ -123,6 +129,7 @@ export function OutageProvider({ children }: { children: ReactNode }) {
 
   // 1) 앱이 처음 뜰 때 localStorage에서 초기 상태를 읽습니다 (SSR 안전)
   useEffect(() => {
+    if (isRealApiMode()) return;
     const stored = readStored();
     if (stored) {
       fromRemoteRef.current = true;
@@ -133,6 +140,7 @@ export function OutageProvider({ children }: { children: ReactNode }) {
 
   // 2) 다른 탭에서 온 메시지를 반영합니다
   useEffect(() => {
+    if (isRealApiMode()) return;
     if (typeof window === "undefined") return;
 
     if (typeof BroadcastChannel !== "undefined") {
@@ -168,6 +176,7 @@ export function OutageProvider({ children }: { children: ReactNode }) {
 
   // 4) 상태가 바뀌면 저장하고 방송합니다 (원격 변경은 방송하지 않음)
   useEffect(() => {
+    if (isRealApiMode()) return;
     if (typeof window === "undefined") return;
     if (!hydratedRef.current) return;
 
@@ -183,6 +192,66 @@ export function OutageProvider({ children }: { children: ReactNode }) {
     if (wasRemote) return;
     channelRef.current?.postMessage(outage);
   }, [outage]);
+
+  useEffect(() => {
+    if (!isRealApiMode()) return;
+    let active = true;
+
+    const sync = async () => {
+      const role = getActiveRole();
+      if (!role) return;
+      try {
+        const current = await getCurrentImpactCase(role);
+        if (!active || !current) return;
+        setCurrentImpactCase(current);
+        if (current.impactCase.status === "PREPARE" || current.outage.status === "SCHEDULED") {
+          setOutage({ ...calmState });
+          return;
+        }
+        const response = current.patientResponse;
+        const answer: PatientAnswer =
+          response?.responseType === "NORMAL"
+            ? "ok"
+            : response?.note?.includes("119")
+              ? "call"
+              : response
+                ? "guardian"
+                : "none";
+        const startedAt = current.outage.startedAt ?? current.outage.scheduledStartAt;
+        const expectedEndAt = current.outage.expectedEndAt;
+        const formatTime = (value: string | null) =>
+          value
+            ? new Intl.DateTimeFormat("ko-KR", {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+              }).format(new Date(value))
+            : "";
+        setOutage({
+          mode: "outage",
+          area: current.outage.title,
+          startAt: formatTime(startedAt),
+          endAt: formatTime(expectedEndAt),
+          cause: current.outage.title,
+          sentAt: Date.parse(startedAt ?? current.impactCase.createdAt),
+          patientAnswer: answer,
+          answeredAt: response ? Date.parse(response.respondedAt) : 0,
+        });
+      } catch (cause) {
+        if (active && cause instanceof ApiError && cause.code === "CURRENT_IMPACT_CASE_NOT_FOUND") {
+          setCurrentImpactCase(null);
+          setOutage({ ...calmState });
+        }
+      }
+    };
+
+    void sync();
+    const id = window.setInterval(() => void sync(), 3000);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+    };
+  }, []);
 
   const sendOutage = useCallback((payload: OutagePayload = {}) => {
     setOutage({
@@ -210,6 +279,29 @@ export function OutageProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const submitPatientAnswer = useCallback(
+    async (answer: Exclude<PatientAnswer, "none">) => {
+      if (!isRealApiMode()) {
+        setPatientAnswer(answer);
+        return;
+      }
+      if (!currentImpactCase) throw new Error("현재 재난 대응 상황을 찾을 수 없습니다.");
+      const mapping = {
+        ok: { responseType: "NORMAL" as const, note: null },
+        guardian: { responseType: "NEED_HELP" as const, note: "보호자 도움이 필요합니다." },
+        call: { responseType: "NEED_HELP" as const, note: "119 연락이 필요합니다." },
+      };
+      const selected = mapping[answer];
+      await submitPatientResponse(
+        currentImpactCase.impactCase.id,
+        selected.responseType,
+        selected.note,
+      );
+      setPatientAnswer(answer);
+    },
+    [currentImpactCase, setPatientAnswer],
+  );
+
   const shortenEscalation = useCallback(() => setDemo((d) => ({ ...d, escalationSeconds: 8 })), []);
   const toggleFast = useCallback(
     () => setDemo((d) => ({ ...d, speed: d.speed === 1 ? 60 : 1 })),
@@ -225,9 +317,11 @@ export function OutageProvider({ children }: { children: ReactNode }) {
     <OutageContext.Provider
       value={{
         outage,
+        currentImpactCase,
         sendOutage,
         endOutage,
         setPatientAnswer,
+        submitPatientAnswer,
         demo,
         shortenEscalation,
         toggleFast,

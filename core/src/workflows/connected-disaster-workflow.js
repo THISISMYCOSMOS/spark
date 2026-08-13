@@ -30,6 +30,7 @@ export class ConnectedDisasterWorkflow {
     const prepared = this.backendBWorkflow.prepare({ outage, patients, now });
     const persistence = await this.#persistPreparedCases(outage.id, prepared.created);
     const execution = await this.backendBWorkflow.executePrepared({ outage, patients, impactCases: prepared.created, now });
+    const responsePlanPersistence = await this.#persistResponsePlans(execution.responsePlans ?? []);
     const transitions = await this.#persistStartedStatusChecks(prepared.created, execution.statusChecks);
     return {
       document,
@@ -39,6 +40,7 @@ export class ConnectedDisasterWorkflow {
       created: prepared.created,
       skipped: prepared.skipped,
       persistence,
+      responsePlanPersistence,
       transitions,
       ...execution,
     };
@@ -62,6 +64,14 @@ export class ConnectedDisasterWorkflow {
       impactCase.version = saved.version;
       impactCase.updatedAt = saved.updatedAt;
       persisted.push(saved);
+    }
+    return persisted;
+  }
+
+  async #persistResponsePlans(responsePlans) {
+    const persisted = [];
+    for (const responsePlan of responsePlans) {
+      persisted.push(await this.backendAClient.saveResponsePlan(responsePlan));
     }
     return persisted;
   }

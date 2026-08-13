@@ -36,9 +36,7 @@ def verify_password(password: str, encoded: str) -> bool:
 
 
 def generate_guardian_code() -> str:
-    # 혼동하기 쉬운 0/O, 1/I를 제외한 10자리 코드
-    alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-    return "".join(secrets.choice(alphabet) for _ in range(10))
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def digest_guardian_code(code: str) -> str:

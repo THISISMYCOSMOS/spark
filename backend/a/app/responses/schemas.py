@@ -65,6 +65,16 @@ class PublicCheckInResponse(BaseModel):
         return PatientResponseType.NORMAL if value == "OK" else value
 
 
+class PatientStatusResponseRequest(BaseModel):
+    response_type: PatientResponseType
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("response_type", mode="before")
+    @classmethod
+    def legacy_response_type(cls, value):
+        return PatientResponseType.NORMAL if value == "OK" else value
+
+
 class GuardianActionRequest(BaseModel):
     emergency_contact_id: str = Field(min_length=36, max_length=36)
     status: GuardianActionStatus

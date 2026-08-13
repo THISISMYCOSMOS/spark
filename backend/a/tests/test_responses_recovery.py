@@ -105,6 +105,68 @@ def test_patient_response_token_once_and_guardian_action():
         assert db.scalar(select(PatientResponse)).response_type.value == "NORMAL"
 
 
+def test_logged_in_patient_response_uses_pending_status_check():
+    with TestClient(app) as client:
+        registered = client.post(
+            f"/api/v1/impact-cases/{IDS['case']}/status-checks",
+            json=check_body("authenticated-patient-token-123456"),
+            headers=auth(UserRole.CORE_ENGINE, IDS["core"], "register-authenticated-check-01"),
+        )
+        assert registered.status_code == 201, registered.text
+
+        responded = client.post(
+            f"/api/v1/impact-cases/{IDS['case']}/patient-responses",
+            json={"response_type": "NEED_HELP", "note": "보호자 도움이 필요합니다."},
+            headers=auth(UserRole.PATIENT, IDS["patient"], "patient-response-01"),
+        )
+        assert responded.status_code == 201, responded.text
+        assert responded.json()["data"]["responseType"] == "NEED_HELP"
+
+        repeated = client.post(
+            f"/api/v1/impact-cases/{IDS['case']}/patient-responses",
+            json={"response_type": "NEED_HELP"},
+            headers=auth(UserRole.PATIENT, IDS["patient"], "patient-response-02"),
+        )
+        assert repeated.status_code == 404
+        assert repeated.json()["error"]["code"] == "PENDING_STATUS_CHECK_NOT_FOUND"
+
+
+def test_response_plan_is_saved_and_visible_to_linked_accounts():
+    plan = {
+        "status": "PROPOSED",
+        "reviewRequired": True,
+        "policyVersion": "DISASTER_RESPONSE_PLAN_V1",
+        "actions": [{"code": "CHECK_DEVICE_POWER", "instructionKo": "의료기기 전원 상태를 확인하세요."}],
+        "narrative": "의료기기 전원 상태를 확인하세요.",
+        "narrativeSource": "AI",
+        "model": "gemini-test",
+        "requestId": "request-1",
+        "fallbackReason": None,
+    }
+    with TestClient(app) as client:
+        saved = client.put(
+            f"/api/v1/impact-cases/{IDS['case']}/response-plan",
+            json=plan,
+            headers=auth(UserRole.CORE_ENGINE, IDS["core"], "response-plan-save-01"),
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["data"]["responsePlan"] == plan
+
+        patient_view = client.get(
+            f"/api/v1/patients/{IDS['patient']}/current-impact-case",
+            headers=auth(UserRole.PATIENT, IDS["patient"]),
+        )
+        assert patient_view.status_code == 200, patient_view.text
+        assert patient_view.json()["data"]["impactCase"]["responsePlan"] == plan
+        assert patient_view.json()["data"]["outage"]["id"] == IDS["outage"]
+
+        guardian_view = client.get(
+            f"/api/v1/patients/{IDS['patient']}/current-impact-case",
+            headers=auth(UserRole.GUARDIAN, IDS["guardian"]),
+        )
+        assert guardian_view.status_code == 200, guardian_view.text
+
+
 def test_legacy_recovery_purpose_is_stored_and_returned_canonically():
     recovery_check_id = "80000000-0000-0000-0000-000000000002"
     with SessionLocal() as db:

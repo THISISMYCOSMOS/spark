@@ -85,6 +85,14 @@ export class BackendAHttpClient {
     });
   }
 
+  async saveResponsePlan({ impactCaseId, ...responsePlan }) {
+    return this.#request(`/api/v1/impact-cases/${encodeURIComponent(impactCaseId)}/response-plan`, {
+      method: "PUT",
+      idempotencyKey: idempotencyKey("response-plan", `${impactCaseId}:${responsePlan.requestId ?? responsePlan.policyVersion}`),
+      body: responsePlan,
+    });
+  }
+
   async registerStatusCheck({ id, caseId, purpose, token, providerAcceptedAt, responseDueAt, tokenExpiresAt, idempotencyKey: key }) {
     return this.#request(`/api/v1/impact-cases/${encodeURIComponent(caseId)}/status-checks`, {
       method: "POST",

@@ -304,6 +304,8 @@ class ImpactCase(Base):
     response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     risk_calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     risk_reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    response_plan: Mapped[dict | None] = mapped_column(JSON)
+    response_plan_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

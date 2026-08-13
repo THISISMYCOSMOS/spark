@@ -14,7 +14,7 @@ from ..outages.presenters import impact_case_view, outage_view
 from ..audit_repository import AuditLogRepository
 from ..security import digest_response_token
 from ..patients.repositories import GuardianPatientRepository
-from .schemas import GuardianActionRequest, PublicCheckInResponse, RecoveryConfirmationRequest, RegionalRecoveryRequest, StatusCheckRegisterRequest, TimeoutRequest
+from .schemas import GuardianActionRequest, PatientStatusResponseRequest, PublicCheckInResponse, RecoveryConfirmationRequest, RegionalRecoveryRequest, StatusCheckRegisterRequest, TimeoutRequest
 
 
 def as_utc(value: datetime) -> datetime:
@@ -93,6 +93,44 @@ class ResponseService:
             result = {"statusCheckId": check.id, "purpose": check.purpose.value, "homePowerRestored": body.home_power_restored, "deviceOperatingNormally": body.device_operating_normally, "caseClosed": False, "decisionPending": True, "acceptedAt": now.isoformat()}
         check.status, check.responded_at, check.version = StatusCheckStatus.RESPONDED, now, check.version + 1
         self._audit("StatusCheck", check.id, AuditAction.STATE_CHANGED, case.patient_id, UserRole.PATIENT, "환자 공개 응답", check_before, self._check_view(check))
+        self._commit("CHECK_IN_RESPONSE_CONFLICT", "응답이 동시에 처리되었습니다.")
+        return result
+
+    def patient_response(self, patient_id: str, case_id: str, body: PatientStatusResponseRequest) -> dict:
+        case = self._case(case_id)
+        if case.patient_id != patient_id:
+            raise ForbiddenError("PATIENT_ACCESS_DENIED", "본인의 재난 대응 상황에만 응답할 수 있습니다.")
+        check = self.db.scalar(
+            select(StatusCheck)
+            .where(
+                StatusCheck.impact_case_id == case_id,
+                StatusCheck.purpose == StatusCheckPurpose.OUTAGE_STATUS,
+                StatusCheck.status == StatusCheckStatus.PENDING,
+            )
+            .order_by(StatusCheck.requested_at.desc())
+            .limit(1)
+        )
+        if check is None:
+            raise NotFoundError("PENDING_STATUS_CHECK_NOT_FOUND", "응답을 기다리는 상태 확인이 없습니다.")
+        now = datetime.now(timezone.utc)
+        if now > as_utc(check.token_expires_at):
+            raise GoneError("STATUS_CHECK_EXPIRED", "상태 확인 응답 시간이 만료되었습니다.")
+        before = self._check_view(check)
+        response = PatientResponse(
+            status_check_id=check.id,
+            response_type=body.response_type,
+            note=body.note,
+            responded_at=now,
+        )
+        self.db.add(response)
+        check.status, check.responded_at, check.version = StatusCheckStatus.RESPONDED, now, check.version + 1
+        result = {
+            "statusCheckId": check.id,
+            "purpose": check.purpose.value,
+            "responseType": body.response_type.value,
+            "acceptedAt": now.isoformat(),
+        }
+        self._audit("StatusCheck", check.id, AuditAction.STATE_CHANGED, patient_id, UserRole.PATIENT, "로그인 환자 상태 응답", before, self._check_view(check))
         self._commit("CHECK_IN_RESPONSE_CONFLICT", "응답이 동시에 처리되었습니다.")
         return result
 

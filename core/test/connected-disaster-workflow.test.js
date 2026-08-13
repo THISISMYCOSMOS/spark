@@ -37,6 +37,7 @@ test("PDF부터 Backend A HTTP mock, 세 Gemini 역할, Backend B Mock SMS까지
       expectedEndAt: "2026-08-14T04:00:00.000Z",
     },
     { id: "backend-a-case-1", version: 1, updatedAt: "2026-08-14T00:40:00.000Z" },
+    { id: "backend-a-case-1", version: 1, updatedAt: "2026-08-14T00:40:01.000Z" },
     { id: "backend-a-case-1", version: 2, status: "WAITING_PATIENT", updatedAt: "2026-08-14T00:40:01.000Z" },
   ];
   const backendAClient = new BackendAHttpClient({
@@ -129,10 +130,13 @@ test("PDF부터 Backend A HTTP mock, 세 Gemini 역할, Backend B Mock SMS까지
   assert.deepEqual(backendARequests.map(({ url }) => new URL(url).pathname), [
     "/api/v1/core/disasters",
     "/api/v1/outages/backend-a-outage-1/impact-cases",
+    "/api/v1/impact-cases/backend-a-case-1/response-plan",
     "/api/v1/impact-cases/backend-a-case-1/transitions",
   ]);
   assert.equal(JSON.parse(backendARequests[1].options.body).status, "PREPARE");
-  assert.equal(JSON.parse(backendARequests[2].options.body).next_status, "WAITING_PATIENT");
+  assert.equal(JSON.parse(backendARequests[2].options.body).status, "PROPOSED");
+  assert.equal(JSON.parse(backendARequests[2].options.body).reviewRequired, true);
+  assert.equal(JSON.parse(backendARequests[3].options.body).next_status, "WAITING_PATIENT");
   const geminiSerialized = JSON.stringify(geminiRequests);
   assert.equal(geminiSerialized.includes("김테스트"), false);
   assert.equal(geminiSerialized.includes("01012345678"), false);

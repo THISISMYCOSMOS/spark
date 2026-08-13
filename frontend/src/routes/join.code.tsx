@@ -1,12 +1,14 @@
 import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PhoneShell } from "@/components/PhoneShell";
 import { Pad } from "@/components/Pad";
 import { CodeCells } from "@/components/CodeCells";
 import { NumberPad } from "@/components/NumberPad";
 import { useApp } from "@/contexts/AppContext";
-import { useGuardian } from "@/contexts/GuardianContext";
+import { DEVICE_OPTIONS, useGuardian } from "@/contexts/GuardianContext";
+import { loginPatient } from "@/lib/api/auth";
+import { ApiError, isRealApiMode } from "@/lib/api/client";
 
 export const Route = createFileRoute("/join/code")({
   head: () => ({
@@ -25,20 +27,62 @@ export const Route = createFileRoute("/join/code")({
 
 function Page() {
   const { code, setCode } = useApp();
-  const { patientCode } = useGuardian();
+  const { patientCode, setPatientCode, setField } = useGuardian();
   const navigate = useNavigate();
   const router = useRouter();
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const loginStartedRef = useRef(false);
 
   useEffect(() => {
     if (code.length !== 6) return;
-    if (code === patientCode) {
-      navigate({ to: "/join/confirm" });
-    } else {
-      setError("번호가 맞지 않습니다. 다시 눌러주세요.");
-      setCode("");
+    if (!isRealApiMode()) {
+      if (code === patientCode) {
+        navigate({ to: "/join/confirm" });
+      } else {
+        setError("번호가 맞지 않습니다. 다시 눌러주세요.");
+        setCode("");
+      }
+      return;
     }
-  }, [code, patientCode, navigate, setCode]);
+    if (loginStartedRef.current) return;
+    loginStartedRef.current = true;
+    setIsSubmitting(true);
+    setError("");
+
+    void loginPatient(code)
+      .then((result) => {
+        const patient = result.patient;
+        const guardian = result.guardian;
+        setPatientCode(code);
+        if (patient) {
+          setField("patientName", patient.name);
+          setField("patientPhone", patient.phone);
+          setField("addressLine1", patient.address);
+          setField(
+            "selectedMachines",
+            patient.electronicDevices
+              .map((name) => DEVICE_OPTIONS.find((device) => device.name === name)?.id)
+              .filter((id): id is string => Boolean(id)),
+          );
+        }
+        if (guardian) {
+          setField("guardianName", guardian.name);
+          setField("guardianPhones", [{ id: "phone-1", kind: "휴대폰", number: guardian.phone }]);
+        }
+        navigate({ to: "/join/confirm" });
+      })
+      .catch((cause: unknown) => {
+        setError(
+          cause instanceof ApiError || cause instanceof Error
+            ? cause.message
+            : "번호를 확인하지 못했습니다. 다시 시도해 주세요.",
+        );
+        setCode("");
+        loginStartedRef.current = false;
+      })
+      .finally(() => setIsSubmitting(false));
+  }, [code, patientCode, navigate, setCode, setField, setPatientCode]);
 
   const handleDigit = (digit: string) => {
     if (code.length < 6) {
@@ -94,8 +138,16 @@ function Page() {
           <br />
           키보드 숫자키와 백스페이스(지움)도 쓸 수 있습니다.
           <br />
-          <span className="font-semibold text-ink">시연용 코드: {patientCode}</span>
+          {!isRealApiMode() ? (
+            <span className="font-semibold text-ink">시연용 코드: {patientCode}</span>
+          ) : null}
         </p>
+
+        {isSubmitting ? (
+          <p role="status" className="t-body font-semibold text-safe">
+            번호를 확인하고 있습니다.
+          </p>
+        ) : null}
 
         {error ? (
           <p role="alert" className="t-body font-semibold text-crit">

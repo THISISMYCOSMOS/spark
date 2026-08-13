@@ -7,6 +7,7 @@ import { Band } from "@/components/guardian/Band";
 import { GhostButton, PrimaryButton } from "@/components/guardian/Buttons";
 import { InfoCard } from "@/components/guardian/InfoCard";
 import { useGuardian } from "@/contexts/GuardianContext";
+import { isRealApiMode } from "@/lib/api/client";
 
 export const Route = createFileRoute("/guardian/join/code")({
   head: () => ({
@@ -59,7 +60,9 @@ function GuardianJoinCode() {
       >
         이 번호를 문자로 보내기
       </PrimaryButton>
-      <GhostButton onClick={regenerateCode}>번호 다시 만들기</GhostButton>
+      {!isRealApiMode() ? (
+        <GhostButton onClick={regenerateCode}>번호 다시 만들기</GhostButton>
+      ) : null}
 
       <InfoCard title="어머니 화면은 이렇게 됩니다">
         번호를 누르면 등록하신 내용이 그대로 뜹니다. 어머니는 아무것도 입력하지 않으셔도 됩니다.

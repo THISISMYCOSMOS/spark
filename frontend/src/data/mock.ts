@@ -92,6 +92,24 @@ export interface Vital {
   verdict: Record<Tone, string>;
 }
 
+/** Core의 AI 대응책 응답과 동일한 표시 계약 */
+export interface AiResponsePlanAction {
+  code: string;
+  instructionKo: string;
+}
+
+export interface AiResponsePlan {
+  status: "PROPOSED";
+  reviewRequired: boolean;
+  policyVersion: string;
+  actions: AiResponsePlanAction[];
+  narrative: string;
+  narrativeSource: "AI" | "RULE_FALLBACK";
+  model: string | null;
+  requestId: string | null;
+  fallbackReason: string | null;
+}
+
 export const patient: Patient = {
   name: "김영자",
   age: 78,
@@ -192,6 +210,36 @@ export const outage: Outage = {
   startedAt: "21시 42분",
   restoredAt: "22시 34분",
   durationMinutes: 52,
+};
+
+/**
+ * 실제 API 연결 전 화면 검증용 대응책입니다.
+ * Core의 AiResponsePlanComposer 반환 구조를 그대로 따릅니다.
+ */
+export const aiResponsePlan: AiResponsePlan = {
+  status: "PROPOSED",
+  reviewRequired: true,
+  policyVersion: "DISASTER_RESPONSE_PLAN_V1",
+  narrative:
+    "산소발생기의 전원 연결과 배터리 잔량을 먼저 확인하세요. 예비 전원을 사용할 수 있는지 살펴보고, 기기는 등록된 제조사 지침과 의료진의 기존 계획에 따라 사용하세요.",
+  narrativeSource: "AI",
+  actions: [
+    {
+      code: "CHECK_DEVICE_POWER",
+      instructionKo: "산소발생기의 전원 연결과 배터리 잔량을 확인합니다.",
+    },
+    {
+      code: "CHECK_BACKUP_POWER",
+      instructionKo: "예비 전원을 사용할 수 있는지와 남은 시간을 확인합니다.",
+    },
+    {
+      code: "FOLLOW_DEVICE_MANUFACTURER_INSTRUCTIONS",
+      instructionKo: "기기는 등록된 제조사 지침과 의료진의 기존 계획에 따라 사용합니다.",
+    },
+  ],
+  model: null,
+  requestId: null,
+  fallbackReason: null,
 };
 
 /** 긴급 신고 번호 */

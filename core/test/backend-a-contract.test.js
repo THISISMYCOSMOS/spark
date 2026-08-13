@@ -62,3 +62,34 @@ test("상태 확인 ID를 전달하고 공급자 접수 시각부터 응답 타�
   assert.equal(registered.providerAcceptedAt, "2026-08-14T00:00:05.000Z");
   assert.equal(registered.responseDueAt, "2026-08-14T00:00:15.000Z");
 });
+
+test("AI 대응책 제안을 Backend A에 원본 계약으로 저장한다", async () => {
+  let request;
+  const client = new BackendAHttpClient({
+    baseUrl: "https://backend-a.test",
+    coreToken: "core-token",
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return ok({ id: "case-id" });
+    },
+  });
+  const plan = {
+    impactCaseId: "case-id",
+    status: "PROPOSED",
+    reviewRequired: true,
+    policyVersion: "DISASTER_RESPONSE_PLAN_V1",
+    actions: [{ code: "CHECK_DEVICE_POWER", instructionKo: "기기 전원을 확인하세요." }],
+    narrative: "기기 전원을 확인하세요.",
+    narrativeSource: "RULE_FALLBACK",
+    model: null,
+    requestId: null,
+    fallbackReason: "AI_CLIENT_ERROR",
+  };
+
+  await client.saveResponsePlan(plan);
+
+  assert.equal(new URL(request.url).pathname, "/api/v1/impact-cases/case-id/response-plan");
+  const expectedBody = { ...plan };
+  delete expectedBody.impactCaseId;
+  assert.deepEqual(JSON.parse(request.options.body), expectedBody);
+});

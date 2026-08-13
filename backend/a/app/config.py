@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 7 * 24 * 60
     guardian_code_pepper: str = "development-only-code-pepper"
     response_token_pepper: str = "development-only-response-token-pepper"
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080"
 
     @property
     def cors_origin_list(self) -> list[str]:

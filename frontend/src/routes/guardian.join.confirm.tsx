@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { useBack } from "@/hooks/useBack";
 
@@ -6,6 +7,8 @@ import { GuardianShell, GuardianSpacer } from "@/components/guardian/GuardianShe
 import { GhostButton, PrimaryButton } from "@/components/guardian/Buttons";
 import { useGuardian } from "@/contexts/GuardianContext";
 import { buildGuardianSummary } from "@/lib/guardianSummary";
+import { ApiError, isRealApiMode } from "@/lib/api/client";
+import { registerGuardianProfile } from "@/lib/registration";
 
 export const Route = createFileRoute("/guardian/join/confirm")({
   head: () => ({
@@ -32,6 +35,31 @@ function GuardianJoinConfirm() {
   const goBack = useBack("/guardian/join/contacts");
   const guardian = useGuardian();
   const rows = buildGuardianSummary(guardian);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const register = async () => {
+    if (!isRealApiMode()) {
+      navigate({ to: "/guardian/join/code" });
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError("");
+    try {
+      const result = await registerGuardianProfile(guardian);
+      guardian.setPatientCode(result.guardianCode ?? "");
+      navigate({ to: "/guardian/join/code" });
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError || cause instanceof Error
+          ? cause.message
+          : "등록하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <GuardianShell
@@ -69,8 +97,14 @@ function GuardianJoinConfirm() {
 
       <GuardianSpacer />
 
-      <PrimaryButton onClick={() => navigate({ to: "/guardian/join/code" })}>
-        등록하기
+      {error ? (
+        <p role="alert" className="mb-3 rounded-[12px] bg-crit-bg px-4 py-3 t-note-sm text-crit">
+          {error}
+        </p>
+      ) : null}
+
+      <PrimaryButton disabled={isSubmitting} onClick={() => void register()}>
+        {isSubmitting ? "등록하는 중입니다" : "등록하기"}
       </PrimaryButton>
       <GhostButton onClick={() => navigate({ to: "/guardian/join/profile" })}>
         처음부터 고치기

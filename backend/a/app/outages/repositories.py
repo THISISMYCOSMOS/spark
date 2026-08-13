@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import ImpactCase, OutageEvent, Patient, RiskPolicy
+from ..models import ImpactCase, ImpactCaseStatus, OutageEvent, Patient, RiskPolicy
 
 
 class OutageRepository:
@@ -39,6 +39,18 @@ class ImpactCaseRepository:
             .order_by(ImpactCase.created_at)
         )
         return list(self.db.scalars(statement))
+
+    def find_current_by_patient(self, patient_id: str) -> ImpactCase | None:
+        statement = (
+            select(ImpactCase)
+            .where(
+                ImpactCase.patient_id == patient_id,
+                ImpactCase.status != ImpactCaseStatus.CLOSED,
+            )
+            .order_by(ImpactCase.created_at.desc())
+            .limit(1)
+        )
+        return self.db.scalar(statement)
 
 
 class RiskPolicyRepository:

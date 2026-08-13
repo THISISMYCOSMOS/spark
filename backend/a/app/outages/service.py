@@ -1,17 +1,19 @@
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..errors import ConflictError, NotFoundError
+from ..errors import ConflictError, ForbiddenError, NotFoundError
 from ..models import (
     AuditAction, AuditLog, ImpactCase, ImpactCaseStatus, OutageEvent, OutageEventHistory,
-    OutageStatus, OutageType, UserRole,
+    OutageStatus, OutageType, PatientResponse, StatusCheck, UserRole,
 )
 from ..audit_repository import AuditLogRepository
+from ..patients.repositories import GuardianPatientRepository
 from .presenters import impact_case_view, outage_view
 from .repositories import ImpactCaseRepository, OutageRepository, PatientExistenceRepository, RiskPolicyRepository
-from .schemas import ImpactCaseCreateRequest, ImpactCaseTransitionRequest, OutageCloseRequest, OutageCreateRequest, OutageUpdateRequest, RiskResultRequest, StateChangeRequest
+from .schemas import ImpactCaseCreateRequest, ImpactCaseTransitionRequest, OutageCloseRequest, OutageCreateRequest, OutageUpdateRequest, ResponsePlanSaveRequest, RiskResultRequest, StateChangeRequest
 
 
 class OutageService:
@@ -21,6 +23,7 @@ class OutageService:
         self.cases = ImpactCaseRepository(db)
         self.policies = RiskPolicyRepository(db)
         self.patients = PatientExistenceRepository(db)
+        self.links = GuardianPatientRepository(db)
         self.audits = AuditLogRepository(db)
 
     def create(self, actor_id: str, body: OutageCreateRequest, actor_role: UserRole = UserRole.INSTITUTION_ADMIN) -> dict:
@@ -111,6 +114,44 @@ class OutageService:
 
     def get_case(self, case_id: str) -> dict:
         return impact_case_view(self._case(case_id))
+
+    def get_current_case(self, actor_id: str, role: UserRole, patient_id: str) -> dict:
+        allowed = (role == UserRole.PATIENT and actor_id == patient_id) or (
+            role == UserRole.GUARDIAN and self.links.exists(actor_id, patient_id)
+        )
+        if not allowed:
+            raise ForbiddenError("IMPACT_CASE_ACCESS_DENIED", "해당 환자의 현재 상황을 조회할 권한이 없습니다.")
+        case = self.cases.find_current_by_patient(patient_id)
+        if case is None:
+            raise NotFoundError("CURRENT_IMPACT_CASE_NOT_FOUND", "진행 중인 재난 대응 상황이 없습니다.")
+        latest_response = self.db.scalar(
+            select(PatientResponse)
+            .join(StatusCheck, PatientResponse.status_check_id == StatusCheck.id)
+            .where(StatusCheck.impact_case_id == case.id)
+            .order_by(PatientResponse.responded_at.desc())
+            .limit(1)
+        )
+        response_view = None if latest_response is None else {
+            "responseType": latest_response.response_type.value,
+            "note": latest_response.note,
+            "respondedAt": latest_response.responded_at.isoformat(),
+        }
+        return {
+            "outage": outage_view(case.outage),
+            "impactCase": impact_case_view(case),
+            "patientResponse": response_view,
+        }
+
+    def save_response_plan(self, actor_id: str, case_id: str, body: ResponsePlanSaveRequest) -> dict:
+        case = self._case(case_id)
+        if case.status == ImpactCaseStatus.CLOSED:
+            raise ConflictError("IMPACT_CASE_CLOSED", "종료된 대응 건에는 AI 대응책을 저장할 수 없습니다.")
+        before = impact_case_view(case)
+        case.response_plan = body.model_dump(mode="json", by_alias=True)
+        case.response_plan_updated_at = datetime.now(timezone.utc)
+        self._audit(case, AuditAction.UPDATED, actor_id, UserRole.CORE_ENGINE, "AI 대응책 제안 저장", before, impact_case_view(case))
+        self._commit("RESPONSE_PLAN_SAVE_CONFLICT", "AI 대응책 저장이 충돌했습니다.")
+        return impact_case_view(case)
 
     def transition_case(self, actor_id: str, case_id: str, body: ImpactCaseTransitionRequest) -> dict:
         case = self._case(case_id)

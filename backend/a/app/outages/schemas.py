@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -137,6 +138,23 @@ class ImpactCaseTransitionRequest(BaseModel):
     next_status: ImpactCaseStatus
     version: int = Field(ge=1)
     reason: str = Field(min_length=1, max_length=500)
+
+
+class ResponsePlanAction(BaseModel):
+    code: str = Field(min_length=1, max_length=100)
+    instructionKo: str = Field(min_length=1, max_length=1000)
+
+
+class ResponsePlanSaveRequest(BaseModel):
+    status: Literal["PROPOSED"]
+    reviewRequired: Literal[True]
+    policyVersion: str = Field(min_length=1, max_length=100)
+    actions: list[ResponsePlanAction] = Field(min_length=1, max_length=30)
+    narrative: str = Field(min_length=1, max_length=2000)
+    narrativeSource: Literal["AI", "RULE_FALLBACK"]
+    model: str | None = Field(default=None, max_length=200)
+    requestId: str | None = Field(default=None, max_length=200)
+    fallbackReason: str | None = Field(default=None, max_length=200)
 
 
 class RiskResultRequest(BaseModel):
