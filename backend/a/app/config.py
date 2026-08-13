@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     response_token_pepper: str = "development-only-response-token-pepper"
     core_engine_token: str | None = None
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080"
+    expo_push_api_url: str = "https://exp.host/--/api/v2/push/send"
+    expo_access_token: str | None = None
 
     @property
     def cors_origin_list(self) -> list[str]:

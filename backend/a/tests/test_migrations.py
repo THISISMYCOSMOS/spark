@@ -50,11 +50,13 @@ def test_sqlite_empty_database_upgrades_to_head(tmp_path):
 
     engine = create_engine(database_url)
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0005_ai_response_plan"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006_push_notifications"
         columns = {
             row[1] for row in connection.execute(text("PRAGMA table_info(impact_cases)"))
         }
         assert {"response_plan", "response_plan_updated_at"} <= columns
+        tables = set(connection.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'")).scalars())
+        assert {"push_devices", "push_notification_deliveries"} <= tables
 
 
 def test_sqlite_legacy_database_upgrades_canonical_enum_data(tmp_path):
