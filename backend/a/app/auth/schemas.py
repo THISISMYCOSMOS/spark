@@ -43,7 +43,7 @@ class GuardianLoginRequest(BaseModel):
 
 
 class PatientLoginRequest(BaseModel):
-    guardian_code: str = Field(min_length=8, max_length=30)
+    guardian_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
 class PatientView(BaseModel):

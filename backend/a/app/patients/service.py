@@ -52,6 +52,10 @@ class PatientService:
         patient = self._authorized_patient(actor_id, role, patient_id, write=False)
         return patient_detail(patient)
 
+    def list_for_core(self, region_code: str) -> list[dict]:
+        normalized = region_code.strip().upper()
+        return [patient_detail(patient) for patient in self.patients.list_active_by_region_code(normalized)]
+
     def update(self, guardian_id: str, patient_id: str, body: PatientUpdateRequest) -> dict:
         patient = self._authorized_patient(guardian_id, UserRole.GUARDIAN, patient_id, write=True)
         if patient.version != body.version:

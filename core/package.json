@@ -5,6 +5,8 @@
   "type": "module",
   "description": "재난 PDF, 환자 컨텍스트, AI 대응방법 및 백엔드 연동 코어",
   "scripts": {
+    "dev": "node --env-file=.env --watch src/server.js",
+    "start": "node --env-file=.env src/server.js",
     "test": "node --test",
     "test:watch": "node --test --watch"
   },

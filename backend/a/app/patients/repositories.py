@@ -27,6 +27,22 @@ class PatientRepository:
     def add(self, patient: Patient) -> None:
         self.db.add(patient)
 
+    def list_active_by_region_code(self, region_code: str) -> list[Patient]:
+        statement = (
+            select(Patient)
+            .options(
+                selectinload(Patient.power_profile).selectinload(PowerProfile.devices),
+                selectinload(Patient.emergency_contacts),
+                selectinload(Patient.guardian_links),
+            )
+            .where(
+                Patient.region_code == region_code,
+                Patient.is_active.is_(True),
+            )
+            .order_by(Patient.id)
+        )
+        return list(self.db.scalars(statement))
+
 
 class GuardianPatientRepository:
     def __init__(self, db: Session):

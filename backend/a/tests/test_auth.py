@@ -35,7 +35,8 @@ def test_guardian_signup_login_and_patient_code_login():
         assert signup.status_code == 201
         data = signup.json()["data"]
         assert data["role"] == "GUARDIAN"
-        assert len(data["guardianCode"]) == 10
+        assert len(data["guardianCode"]) == 6
+        assert data["guardianCode"].isdigit()
 
         duplicate = client.post("/api/v1/auth/guardians/signup", json=SIGNUP)
         assert duplicate.status_code == 409
@@ -44,7 +45,7 @@ def test_guardian_signup_login_and_patient_code_login():
         assert login.status_code == 200
         assert login.json()["data"]["patients"][0]["name"] == "이환자"
 
-        patient_login = client.post("/api/v1/auth/patients/login", json={"guardian_code": data["guardianCode"].lower()})
+        patient_login = client.post("/api/v1/auth/patients/login", json={"guardian_code": data["guardianCode"]})
         assert patient_login.status_code == 200
         patient_data = patient_login.json()["data"]
         assert patient_data["role"] == "PATIENT"
@@ -58,7 +59,7 @@ def test_wrong_password_and_code_are_rejected():
     with TestClient(app) as client:
         client.post("/api/v1/auth/guardians/signup", json=SIGNUP)
         assert client.post("/api/v1/auth/guardians/login", json={"phone": "01012345678", "password": "wrong-pass"}).status_code == 401
-        assert client.post("/api/v1/auth/patients/login", json={"guardian_code": "INVALID99"}).status_code == 401
+        assert client.post("/api/v1/auth/patients/login", json={"guardian_code": "999999"}).status_code == 401
 
 
 def test_frontend_cors_preflight_allows_auth_and_idempotency_headers():

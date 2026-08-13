@@ -16,10 +16,12 @@ export class BackendAResponseTokenPort {
     }
     const reservationId = randomUUID();
     const token = randomBytes(24).toString("base64url");
+    const responseUrl = new URL(`/check-in/${encodeURIComponent(token)}`, this.responseBaseUrl);
+    responseUrl.searchParams.set("purpose", purpose);
     const reservation = {
       reservationId,
       token,
-      url: new URL(`/api/v1/public/check-ins/${encodeURIComponent(token)}`, this.responseBaseUrl).toString(),
+      url: responseUrl.toString(),
       impactCaseId,
       purpose,
       requestedAt: new Date(now).toISOString(),
@@ -39,10 +41,10 @@ export class BackendAResponseTokenPort {
     if (reservation.activatedAt) return { ok: true, data: reservation };
     try {
       const check = await this.backendAClient.registerStatusCheck({
+        id: reservation.reservationId,
         caseId: reservation.impactCaseId,
         purpose: reservation.purpose,
         token: reservation.token,
-        requestedAt: reservation.requestedAt,
         providerAcceptedAt: new Date(activatedAt).toISOString(),
         responseDueAt: new Date(expiresAt).toISOString(),
         tokenExpiresAt: new Date(expiresAt).toISOString(),

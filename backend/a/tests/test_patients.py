@@ -3,7 +3,8 @@ from sqlalchemy import select
 
 from app.database import Base, SessionLocal, engine
 from app.main import app
-from app.models import AuditLog, EmergencyContact, MedicalDevice
+from app.models import AuditLog, EmergencyContact, MedicalDevice, UserRole
+from app.security import create_access_token
 
 
 SIGNUP = {
@@ -60,6 +61,11 @@ def guardian_token(client: TestClient) -> str:
     return response.json()["data"]["token"]["accessToken"]
 
 
+def role_headers(role: UserRole, subject: str = "00000000-0000-0000-0000-000000000099") -> dict[str, str]:
+    token, _ = create_access_token(subject, role)
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_patient_create_get_update_and_audit():
     with TestClient(app) as client:
         token = guardian_token(client)
@@ -108,3 +114,24 @@ def test_patient_cannot_create_or_update_and_contact_validation():
         response = client.post("/api/v1/patients", json=invalid, headers=guardian_headers)
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_core_can_list_only_active_patients_in_requested_region():
+    with TestClient(app) as client:
+        guardian_headers = {"Authorization": f"Bearer {guardian_token(client)}"}
+        created = client.post("/api/v1/patients", json=PATIENT, headers=guardian_headers)
+        assert created.status_code == 201, created.text
+
+        core_headers = role_headers(UserRole.CORE_ENGINE)
+        response = client.get("/api/v1/core/patients?regionCode=11140", headers=core_headers)
+        assert response.status_code == 200, response.text
+        patients = response.json()["data"]
+        assert [patient["id"] for patient in patients] == [created.json()["data"]["id"]]
+        assert patients[0]["powerProfile"]["devices"][0]["deviceType"] == "가정용 인공호흡기"
+
+        empty = client.get("/api/v1/core/patients?regionCode=99999", headers=core_headers)
+        assert empty.status_code == 200
+        assert empty.json()["data"] == []
+
+        forbidden = client.get("/api/v1/core/patients?regionCode=11140", headers=guardian_headers)
+        assert forbidden.status_code == 403

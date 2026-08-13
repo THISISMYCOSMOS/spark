@@ -14,13 +14,14 @@
 Vite 기준:
 
 ```env
+VITE_API_MODE=real
 VITE_API_BASE_URL=http://127.0.0.1:8000
 ```
 
 백엔드 `.env`의 `CORS_ORIGINS`에도 프론트 주소가 등록되어야 합니다.
 
 ```env
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080
 ```
 
 ## 2. 공통 응답 형식
@@ -97,11 +98,11 @@ Content-Type: application/json
   },
   "guardian": {},
   "patients": [],
-  "guardianCode": "환자 로그인 코드"
+  "guardianCode": "123456"
 }
 ```
 
-`guardianCode`는 환자에게 전달할 코드이므로 가입 완료 화면에서 복사할 수 있게 표시합니다.
+`guardianCode`는 환자에게 전달할 숫자 6자리 코드이므로 가입 완료 화면에서 복사할 수 있게 표시합니다.
 
 ### 보호자 로그인
 
@@ -124,7 +125,7 @@ POST /api/v1/auth/patients/login
 
 ```json
 {
-  "guardian_code": "보호자에게 받은 코드"
+  "guardian_code": "123456"
 }
 ```
 
@@ -162,6 +163,8 @@ Authorization: Bearer {accessToken}
 | 환자 등록 | POST | `/api/v1/patients` | 보호자 |
 | 환자 상세 조회 | GET | `/api/v1/patients/{patientId}` | 본인 환자/연결 보호자 |
 | 환자 수정 | PUT | `/api/v1/patients/{patientId}` | 연결 보호자 |
+| 현재 재난 대응 조회 | GET | `/api/v1/patients/{patientId}/current-impact-case` | 본인 환자/연결 보호자 |
+| 로그인 환자 상태 응답 | POST | `/api/v1/impact-cases/{caseId}/patient-responses` | 본인 환자 |
 | 문자 상태 응답 | POST | `/api/v1/public/check-ins/{token}/responses` | 없음 |
 | 보호자 행동 등록 | POST | `/api/v1/impact-cases/{caseId}/guardian-actions` | 보호자/기관 관리자 |
 | 보호자 복구 확인 | POST | `/api/v1/impact-cases/{caseId}/recovery-confirmations` | 보호자/기관 관리자 |

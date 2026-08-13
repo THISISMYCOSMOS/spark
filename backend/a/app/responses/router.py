@@ -5,7 +5,7 @@ from ..dependencies import current_identity
 from ..authorization import require_role
 from ..idempotency import execute_idempotent
 from ..models import UserRole
-from .schemas import GuardianActionRequest, PublicCheckInResponse, RecoveryConfirmationRequest, RegionalRecoveryRequest, StatusCheckRegisterRequest, TimeoutRequest
+from .schemas import GuardianActionRequest, PatientStatusResponseRequest, PublicCheckInResponse, RecoveryConfirmationRequest, RegionalRecoveryRequest, StatusCheckRegisterRequest, TimeoutRequest
 from .service import ResponseService
 from ..api_responses import success
 
@@ -34,6 +34,12 @@ def public_response(token: str, body: PublicCheckInResponse, svc=Depends(service
     return success(svc.public_response(token, body))
 
 
+@router.post("/api/v1/impact-cases/{case_id}/patient-responses", status_code=201)
+def patient_response(case_id: str, body: PatientStatusResponseRequest, identity=Depends(current_identity), svc=Depends(service), idempotency_key: str = Header(min_length=8, max_length=100)):
+    patient_id = require_role(identity, UserRole.PATIENT)
+    return success(execute_idempotent(svc.db, patient_id, f"POST:/impact-cases/{case_id}/patient-responses", idempotency_key, body, lambda: svc.patient_response(patient_id, case_id, body)), 201)
+
+
 @router.post("/api/v1/impact-cases/{case_id}/guardian-actions", status_code=201)
 def guardian_action(case_id: str, body: GuardianActionRequest, identity=Depends(current_identity), svc=Depends(service), idempotency_key: str = Header(min_length=8, max_length=100)):
     actor, role = identity
@@ -44,6 +50,12 @@ def guardian_action(case_id: str, body: GuardianActionRequest, identity=Depends(
 def regional_recovery(outage_id: str, body: RegionalRecoveryRequest, identity=Depends(current_identity), svc=Depends(service), idempotency_key: str = Header(min_length=8, max_length=100)):
     actor = require_role(identity, UserRole.INSTITUTION_ADMIN)
     return success(execute_idempotent(svc.db, actor, f"POST:/outages/{outage_id}/recovery", idempotency_key, body, lambda: svc.regional_recovery(actor, outage_id, body)))
+
+
+@router.post("/api/v1/core/outages/{outage_id}/recovery")
+def core_regional_recovery(outage_id: str, body: RegionalRecoveryRequest, identity=Depends(current_identity), svc=Depends(service), idempotency_key: str = Header(min_length=8, max_length=100)):
+    actor = require_role(identity, UserRole.CORE_ENGINE)
+    return success(execute_idempotent(svc.db, actor, f"POST:/core/outages/{outage_id}/recovery", idempotency_key, body, lambda: svc.regional_recovery(actor, outage_id, body, UserRole.CORE_ENGINE)))
 
 
 @router.post("/api/v1/impact-cases/{case_id}/recovery-confirmations", status_code=201)

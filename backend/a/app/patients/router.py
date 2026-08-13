@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from ..database import get_db
 from ..dependencies import current_identity
@@ -10,6 +10,7 @@ from ..api_responses import success
 
 
 router = APIRouter(prefix="/api/v1/patients", tags=["patients"])
+core_router = APIRouter(prefix="/api/v1/core/patients", tags=["core"])
 
 
 def service(db=Depends(get_db)) -> PatientService:
@@ -54,3 +55,13 @@ def update_patient(
         "보호자만 환자 정보를 수정할 수 있습니다.",
     )
     return success(patient_service.update(actor_id, patient_id, body))
+
+
+@core_router.get("")
+def list_core_patients(
+    region_code: str = Query(alias="regionCode", min_length=2, max_length=20),
+    identity: tuple[str, UserRole] = Depends(current_identity),
+    patient_service: PatientService = Depends(service),
+):
+    require_role(identity, UserRole.CORE_ENGINE)
+    return success(patient_service.list_for_core(region_code))

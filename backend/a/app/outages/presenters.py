@@ -41,6 +41,8 @@ def impact_case_view(case: ImpactCase) -> dict:
         "responseDueAt": case.response_due_at.isoformat() if case.response_due_at else None,
         "riskCalculatedAt": case.risk_calculated_at.isoformat(),
         "riskReason": case.risk_reason,
+        "responsePlan": case.response_plan,
+        "responsePlanUpdatedAt": case.response_plan_updated_at.isoformat() if case.response_plan_updated_at else None,
         "version": case.version,
         "createdAt": case.created_at.isoformat(),
         "updatedAt": case.updated_at.isoformat(),

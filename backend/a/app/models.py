@@ -92,6 +92,21 @@ class GuardianActionStatus(str, enum.Enum):
     COMPLETED = "COMPLETED"
 
 
+class PushPlatform(str, enum.Enum):
+    IOS = "IOS"
+    ANDROID = "ANDROID"
+
+
+class PushDeliveryStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    FAILED = "FAILED"
+
+
+class PushNotificationType(str, enum.Enum):
+    DISASTER_ALERT = "DISASTER_ALERT"
+
+
 class Guardian(Base):
     __tablename__ = "guardians"
 
@@ -304,6 +319,8 @@ class ImpactCase(Base):
     response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     risk_calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     risk_reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    response_plan: Mapped[dict | None] = mapped_column(JSON)
+    response_plan_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -354,6 +371,54 @@ class IdempotencyRecord(Base):
     __table_args__ = (
         UniqueConstraint("actor_id", "scope", "idempotency_key", name="uq_idempotency_actor_scope_key"),
         Index("ix_idempotency_created_at", "created_at"),
+    )
+
+
+class PushDevice(Base):
+    __tablename__ = "push_devices"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    owner_role: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False)
+    platform: Mapped[PushPlatform] = mapped_column(Enum(PushPlatform), nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False, default="EXPO")
+    token: Mapped[str] = mapped_column(String(500), nullable=False, unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (Index("ix_push_devices_owner", "owner_id", "owner_role", "is_active"),)
+
+
+class PushNotificationDelivery(Base):
+    __tablename__ = "push_notification_deliveries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    outage_id: Mapped[str] = mapped_column(ForeignKey("outage_events.id"), nullable=False)
+    impact_case_id: Mapped[str] = mapped_column(ForeignKey("impact_cases.id"), nullable=False)
+    notification_type: Mapped[PushNotificationType] = mapped_column(Enum(PushNotificationType), nullable=False)
+    recipient_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    recipient_role: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False)
+    escalation_round: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mode: Mapped[OperationMode] = mapped_column(Enum(OperationMode), nullable=False)
+    disaster_type: Mapped[DisasterType] = mapped_column(Enum(DisasterType), nullable=False)
+    title: Mapped[str] = mapped_column(String(100), nullable=False)
+    body: Mapped[str] = mapped_column(String(500), nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[PushDeliveryStatus] = mapped_column(Enum(PushDeliveryStatus), nullable=False)
+    provider_message_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    last_error: Mapped[str | None] = mapped_column(String(200))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    provider_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "impact_case_id", "notification_type", "recipient_id", "escalation_round",
+            name="uq_push_delivery_case_type_recipient_round",
+        ),
+        Index("ix_push_deliveries_case_status", "impact_case_id", "status"),
     )
 
 
