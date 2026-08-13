@@ -52,6 +52,12 @@ def regional_recovery(outage_id: str, body: RegionalRecoveryRequest, identity=De
     return success(execute_idempotent(svc.db, actor, f"POST:/outages/{outage_id}/recovery", idempotency_key, body, lambda: svc.regional_recovery(actor, outage_id, body)))
 
 
+@router.post("/api/v1/core/outages/{outage_id}/recovery")
+def core_regional_recovery(outage_id: str, body: RegionalRecoveryRequest, identity=Depends(current_identity), svc=Depends(service), idempotency_key: str = Header(min_length=8, max_length=100)):
+    actor = require_role(identity, UserRole.CORE_ENGINE)
+    return success(execute_idempotent(svc.db, actor, f"POST:/core/outages/{outage_id}/recovery", idempotency_key, body, lambda: svc.regional_recovery(actor, outage_id, body, UserRole.CORE_ENGINE)))
+
+
 @router.post("/api/v1/impact-cases/{case_id}/recovery-confirmations", status_code=201)
 def recovery_confirmation(case_id: str, body: RecoveryConfirmationRequest, identity=Depends(current_identity), svc=Depends(service), idempotency_key: str = Header(min_length=8, max_length=100)):
     actor, role = identity

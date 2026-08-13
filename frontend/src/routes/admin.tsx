@@ -5,6 +5,15 @@ import { DemoBar } from "@/components/DemoBar";
 import { LineButton } from "@/components/LineButton";
 import { useOutage } from "@/contexts/OutageContext";
 import { findRegionHouseholds } from "@/data/mock";
+import { isRealApiMode } from "@/lib/api/client";
+import {
+  processDisasterImage,
+  processDisasterPdf,
+  recognizeDisasterImage,
+  reportOutageRecovery,
+  type DisasterImageProposal,
+  type DisasterProcessResult,
+} from "@/lib/api/core";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -67,6 +76,11 @@ function AdminPage() {
   const [notice, setNotice] = useState("");
   const [dragging, setDragging] = useState(false);
   const [reading, setReading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [imageProposal, setImageProposal] = useState<DisasterImageProposal | null>(null);
+  const [processResult, setProcessResult] = useState<DisasterProcessResult | null>(null);
 
   const [area, setArea] = useState("");
   const [startAt, setStartAt] = useState("");
@@ -78,21 +92,45 @@ function AdminPage() {
 
   const households = findRegionHouseholds(area);
   const powerDependent = households?.powerDependent ?? 0;
-  const canSend = area.trim().length > 0 && powerDependent > 0;
+  const realMode = isRealApiMode();
+  const selectedImage = selectedFile?.type.startsWith("image/") ?? false;
+  const canSend = realMode
+    ? selectedFile !== null && !reading && !sending && (!selectedImage || imageProposal !== null)
+    : area.trim().length > 0 && powerDependent > 0;
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
     setNotice("");
+    setProcessResult(null);
+    setSelectedFile(file);
+    setImageProposal(null);
     setReading(true);
     try {
-      const extracted = await extractPdfText(file);
-      if (!extracted) {
-        setNotice("이 PDF에서 글자를 찾지 못했습니다. 내용을 직접 붙여넣어 주세요.");
+      if (file.type === "application/pdf") {
+        const extracted = await extractPdfText(file);
+        if (!extracted) {
+          setNotice("이 PDF에서 글자를 찾지 못했습니다. 내용을 직접 붙여넣어 주세요.");
+        } else {
+          setText(extracted);
+        }
+      } else if (file.type === "image/jpeg" || file.type === "image/png") {
+        if (!realMode) throw new Error("이미지 판독은 실제 API 모드에서 사용할 수 있습니다.");
+        const proposal = await recognizeDisasterImage(file);
+        setImageProposal(proposal);
+        setText(proposal.recognizedText);
+        setCause(
+          ({ TYPHOON: "태풍", EARTHQUAKE: "지진", COLD_WAVE: "한파", FIRE: "화재" } as const)[
+            proposal.disasterType
+          ],
+        );
+        setNotice("이미지 판독 결과입니다. 지역코드와 대응 시간을 확인한 뒤 보내 주세요.");
       } else {
-        setText(extracted);
+        throw new Error("PDF, JPEG 또는 PNG 파일만 올릴 수 있습니다.");
       }
-    } catch {
-      setNotice("이 PDF에서 글자를 찾지 못했습니다. 내용을 직접 붙여넣어 주세요.");
+    } catch (cause) {
+      setSelectedFile(null);
+      setImageProposal(null);
+      setNotice(cause instanceof Error ? cause.message : "파일을 판독하지 못했습니다.");
     } finally {
       setReading(false);
     }
@@ -132,7 +170,43 @@ function AdminPage() {
   const nowLabel = () =>
     new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
 
-  const onSend = () => {
+  const onSend = async () => {
+    if (realMode) {
+      if (!selectedFile || sending) return;
+      if (
+        selectedImage &&
+        (!imageProposal || !/^\d{5}$/.test(area.trim()) || startAt === "" || endAt === "")
+      ) {
+        setNotice("이미지 재난문자의 지역코드와 시작·복구 예정 시각을 모두 확인해 주세요.");
+        return;
+      }
+      setSending(true);
+      setNotice("");
+      try {
+        const result = selectedImage
+          ? await processDisasterImage({
+              proposalId: imageProposal!.proposalId,
+              regionCode: area.trim(),
+              startedAt: new Date(startAt).toISOString(),
+              expectedEndAt: new Date(endAt).toISOString(),
+            })
+          : await processDisasterPdf(selectedFile);
+        setProcessResult(result);
+        setLogs((prev) => [
+          {
+            id: Date.now(),
+            at: nowLabel(),
+            text: `${result.outage.title} · 문자 접수 ${result.acceptedNotifications}건 · 알람 ${result.alarmStarted ? "시작" : "미시작"}`,
+          },
+          ...prev,
+        ]);
+      } catch (cause) {
+        setNotice(cause instanceof Error ? cause.message : "재난 알림을 처리하지 못했습니다.");
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
     sendOutage({ area, startAt, endAt, cause, sentAt: Date.now() });
     setLogs((prev) => [
       {
@@ -144,7 +218,33 @@ function AdminPage() {
     ]);
   };
 
-  const onEnd = () => {
+  const onEnd = async () => {
+    if (realMode) {
+      if (!processResult || recovering) return;
+      setRecovering(true);
+      setNotice("");
+      try {
+        const result = await reportOutageRecovery(processResult.outage.id);
+        setProcessResult((current) =>
+          current
+            ? { ...current, outage: { ...current.outage, status: result.outageStatus } }
+            : current,
+        );
+        setLogs((prev) => [
+          {
+            id: Date.now(),
+            at: nowLabel(),
+            text: `복구 알림 · 환자 확인 ${result.recoveryChecksStarted}건 · 전환 ${result.transitionedCases}건`,
+          },
+          ...prev,
+        ]);
+      } catch (cause) {
+        setNotice(cause instanceof Error ? cause.message : "복구 알림을 처리하지 못했습니다.");
+      } finally {
+        setRecovering(false);
+      }
+      return;
+    }
     endOutage();
     setLogs((prev) => [
       { id: Date.now(), at: nowLabel(), text: "복구 알림 · 전기가 다시 들어왔습니다" },
@@ -186,13 +286,13 @@ function AdminPage() {
           }`}
         >
           <p className="t-body-lg font-semibold text-ink">
-            {reading ? "PDF를 읽는 중입니다" : "정전 공지 PDF를 올려 주세요"}
+            {reading ? "재난문자를 읽는 중입니다" : "재난문자 PDF 또는 이미지를 올려 주세요"}
           </p>
           <p className="mt-1 t-copy-sm text-dim">여기로 끌어다 놓거나 눌러서 파일을 고르세요</p>
           <input
             ref={inputRef}
             type="file"
-            accept="application/pdf"
+            accept="application/pdf,image/jpeg,image/png"
             className="hidden"
             onChange={onPick}
           />
@@ -216,12 +316,20 @@ function AdminPage() {
 
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5 t-copy-sm font-medium text-dim">
-            지역
-            <input className={fieldClass} value={area} onChange={(e) => setArea(e.target.value)} />
+            {realMode && selectedImage ? "지역코드(5자리)" : "지역"}
+            <input
+              className={fieldClass}
+              value={area}
+              inputMode={realMode && selectedImage ? "numeric" : undefined}
+              maxLength={realMode && selectedImage ? 5 : undefined}
+              placeholder={realMode && selectedImage ? "예: 11530" : undefined}
+              onChange={(e) => setArea(e.target.value)}
+            />
           </label>
           <label className="flex flex-col gap-1.5 t-copy-sm font-medium text-dim">
             시작 시각
             <input
+              type={realMode && selectedImage ? "datetime-local" : "text"}
               className={fieldClass}
               value={startAt}
               onChange={(e) => setStartAt(e.target.value)}
@@ -230,6 +338,7 @@ function AdminPage() {
           <label className="flex flex-col gap-1.5 t-copy-sm font-medium text-dim">
             복구 예정
             <input
+              type={realMode && selectedImage ? "datetime-local" : "text"}
               className={fieldClass}
               value={endAt}
               onChange={(e) => setEndAt(e.target.value)}
@@ -247,7 +356,40 @@ function AdminPage() {
 
         <div className="rounded-[18px] border-2 border-line bg-paper p-[22px]">
           <h2 className="t-subheading-sm font-bold text-ink">대상 가구</h2>
-          {households ? (
+          {realMode ? (
+            processResult ? (
+              <>
+                <div className="mt-4 grid grid-cols-3 gap-3">
+                  <div>
+                    <p className="t-copy-sm font-medium text-dim">조회 환자</p>
+                    <p className="t-heading-lg font-bold text-ink">
+                      {processResult.matchedPatients}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="t-copy-sm font-medium text-dim">문자 접수</p>
+                    <p className="t-heading-lg font-bold text-crit">
+                      {processResult.acceptedNotifications}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="t-copy-sm font-medium text-dim">알람</p>
+                    <p className="t-heading-lg font-bold text-ink">
+                      {processResult.alarmStarted ? "시작" : "대기"}
+                    </p>
+                  </div>
+                </div>
+                <p className="mt-3 t-body-sm leading-[150%] text-dim">
+                  지역코드 {processResult.outage.regionCode} · 대응 건 {processResult.createdCases}
+                  건
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 t-body-sm leading-[150%] text-dim">
+                PDF는 정형 필드, 이미지는 관리자 확인 지역코드로 대상 환자를 조회합니다.
+              </p>
+            )
+          ) : households ? (
             <>
               <div className="mt-4 grid grid-cols-3 gap-3">
                 <div>
@@ -276,13 +418,13 @@ function AdminPage() {
 
         <button
           type="button"
-          onClick={onSend}
+          onClick={() => void onSend()}
           disabled={!canSend}
           className="w-full rounded-[18px] bg-crit px-6 py-5 t-title-lg font-bold text-paper transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-crit/40 disabled:cursor-not-allowed disabled:opacity-45"
         >
-          이 내용으로 정전 알림 보내기
+          {sending ? "문자와 알람을 처리하고 있습니다" : "이 내용으로 재난 알림 보내기"}
         </button>
-        {area.trim() && powerDependent === 0 ? (
+        {!realMode && area.trim() && powerDependent === 0 ? (
           <p className="t-copy font-medium text-crit">
             이 지역에는 등록된 전력의존 가구가 없습니다
           </p>
@@ -290,11 +432,15 @@ function AdminPage() {
 
         <button
           type="button"
-          onClick={onEnd}
-          disabled={outage.mode !== "outage"}
+          onClick={() => void onEnd()}
+          disabled={
+            realMode
+              ? !processResult || processResult.outage.status !== "ACTIVE" || recovering
+              : outage.mode !== "outage"
+          }
           className="w-full rounded-[18px] bg-safe px-6 py-5 t-title-lg font-bold text-paper transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-safe/40 disabled:cursor-not-allowed disabled:opacity-45"
         >
-          복구 알림 보내기
+          {recovering ? "복구 확인을 보내고 있습니다" : "복구 알림 보내기"}
         </button>
 
         <div className="rounded-[18px] border-2 border-line bg-paper p-[22px]">

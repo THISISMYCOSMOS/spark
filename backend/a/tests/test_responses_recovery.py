@@ -261,6 +261,45 @@ def test_recovery_snapshot_requires_recovery_check_state():
         assert allowed.json()["data"]["decisionPending"] is True
 
 
+def test_core_can_report_regional_recovery_and_read_outage_cases():
+    now = datetime.now(timezone.utc)
+    core_headers = auth(UserRole.CORE_ENGINE, IDS["core"], "core-regional-recovery-01")
+    with TestClient(app) as client:
+        outage = client.get(
+            f"/api/v1/outages/{IDS['outage']}",
+            headers=auth(UserRole.CORE_ENGINE, IDS["core"]),
+        )
+        assert outage.status_code == 200, outage.text
+
+        cases = client.get(
+            f"/api/v1/outages/{IDS['outage']}/impact-cases",
+            headers=auth(UserRole.CORE_ENGINE, IDS["core"]),
+        )
+        assert cases.status_code == 200, cases.text
+        assert cases.json()["data"][0]["id"] == IDS["case"]
+
+        recovery = client.post(
+            f"/api/v1/core/outages/{IDS['outage']}/recovery",
+            json={
+                "version": outage.json()["data"]["version"],
+                "recovered_at": now.isoformat(),
+                "source": "관리자 복구 버튼",
+                "reason": "Core 복구 워크플로 시작",
+            },
+            headers=core_headers,
+        )
+        assert recovery.status_code == 200, recovery.text
+        assert recovery.json()["data"]["status"] == "RECOVERY_REPORTED"
+
+    with SessionLocal() as db:
+        history = db.scalar(
+            select(OutageEventHistory).where(
+                OutageEventHistory.next_status == OutageStatus.RECOVERY_REPORTED
+            )
+        )
+        assert history.actor_role == UserRole.CORE_ENGINE
+
+
 def test_core_decisions_are_persisted_without_a_recalculating_timeout_or_recovery_closure():
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:

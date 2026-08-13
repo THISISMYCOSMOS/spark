@@ -17,9 +17,16 @@ export class BackendAHttpError extends Error {
 }
 
 export class BackendAHttpClient {
-  constructor({ baseUrl, coreToken, fetchImpl = fetch, riskPolicyId = "00000000-0000-0000-0000-000000000001", riskPolicyVersion = 1 }) {
+  constructor({
+    baseUrl,
+    coreToken,
+    fetchImpl = fetch,
+    riskPolicyId = "00000000-0000-0000-0000-000000000001",
+    riskPolicyVersion = 1,
+  }) {
     if (!coreToken) throw new TypeError("BACKEND_A_CORE_TOKEN is required");
-    if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function");
+    if (typeof fetchImpl !== "function")
+      throw new TypeError("fetchImpl must be a function");
     this.baseUrl = trimBaseUrl(baseUrl);
     this.coreToken = coreToken;
     this.fetchImpl = fetchImpl;
@@ -28,9 +35,13 @@ export class BackendAHttpClient {
   }
 
   async createDisaster(document) {
+    const sourceKind = document.sourceKind === "IMAGE" ? "IMAGE" : "MOCK_PDF";
     return this.#request("/api/v1/core/disasters", {
       method: "POST",
-      idempotencyKey: idempotencyKey("pdf", document.documentSha256),
+      idempotencyKey: idempotencyKey(
+        sourceKind.toLowerCase(),
+        document.documentSha256,
+      ),
       body: {
         title: document.titleKo,
         outage_type: "UNPLANNED",
@@ -42,71 +53,143 @@ export class BackendAHttpClient {
         region_codes: [document.regionCode],
         started_at: document.startedAt,
         expected_end_at: document.expectedEndAt,
-        source: `MOCK_PDF:${document.alertId}`,
+        source: `${sourceKind}:${document.alertId}`,
         description: document.messageKo,
-        reason: "검증된 목업 재난 PDF 수신",
+        reason:
+          sourceKind === "IMAGE"
+            ? "관리자가 확인한 재난문자 이미지 수신"
+            : "검증된 목업 재난 PDF 수신",
       },
     });
   }
 
   async listPatientsByRegion(regionCode) {
     if (!regionCode) throw new TypeError("regionCode is required");
-    return this.#request(`/api/v1/core/patients?regionCode=${encodeURIComponent(regionCode)}`, {
+    return this.#request(
+      `/api/v1/core/patients?regionCode=${encodeURIComponent(regionCode)}`,
+      {
+        method: "GET",
+      },
+    );
+  }
+
+  async getOutage(outageId) {
+    return this.#request(`/api/v1/outages/${encodeURIComponent(outageId)}`, {
       method: "GET",
     });
   }
 
+  async listImpactCases(outageId) {
+    return this.#request(
+      `/api/v1/outages/${encodeURIComponent(outageId)}/impact-cases`,
+      {
+        method: "GET",
+      },
+    );
+  }
+
+  async reportRegionalRecovery({ outageId, version, recoveredAt, source }) {
+    return this.#request(
+      `/api/v1/core/outages/${encodeURIComponent(outageId)}/recovery`,
+      {
+        method: "POST",
+        idempotencyKey: idempotencyKey("recovery", `${outageId}:${version}`),
+        body: {
+          version,
+          recovered_at: new Date(recoveredAt).toISOString(),
+          source,
+          reason: "관리자 확인에 따른 Core 복구 워크플로 시작",
+        },
+      },
+    );
+  }
+
   async createImpactCase(outageId, impactCase) {
     const known = impactCase.safetyTime?.status === "KNOWN";
-    return this.#request(`/api/v1/outages/${encodeURIComponent(outageId)}/impact-cases`, {
-      method: "POST",
-      idempotencyKey: idempotencyKey("case", `${outageId}:${impactCase.patientId}`),
-      body: {
-        id: impactCase.id,
-        patient_id: impactCase.patientId,
-        status: impactCase.status,
-        risk_level: impactCase.riskLevel,
-        risk_policy_id: this.riskPolicyId,
-        risk_policy_version: this.riskPolicyVersion,
-        effective_runtime_minutes: known ? impactCase.safetyTime.effectiveRuntimeMinutes : null,
-        runtime_unknown_reason: known ? null : impactCase.safetyTime?.reason ?? "SAFETY_TIME_UNKNOWN",
-        response_due_at: null,
-        risk_calculated_at: impactCase.updatedAt,
-        risk_reason: impactCase.riskReason,
+    return this.#request(
+      `/api/v1/outages/${encodeURIComponent(outageId)}/impact-cases`,
+      {
+        method: "POST",
+        idempotencyKey: idempotencyKey(
+          "case",
+          `${outageId}:${impactCase.patientId}`,
+        ),
+        body: {
+          id: impactCase.id,
+          patient_id: impactCase.patientId,
+          status: impactCase.status,
+          risk_level: impactCase.riskLevel,
+          risk_policy_id: this.riskPolicyId,
+          risk_policy_version: this.riskPolicyVersion,
+          effective_runtime_minutes: known
+            ? impactCase.safetyTime.effectiveRuntimeMinutes
+            : null,
+          runtime_unknown_reason: known
+            ? null
+            : (impactCase.safetyTime?.reason ?? "SAFETY_TIME_UNKNOWN"),
+          response_due_at: null,
+          risk_calculated_at: impactCase.updatedAt,
+          risk_reason: impactCase.riskReason,
+        },
       },
-    });
+    );
   }
 
   async transitionImpactCase({ caseId, nextStatus, version, reason }) {
-    return this.#request(`/api/v1/impact-cases/${encodeURIComponent(caseId)}/transitions`, {
-      method: "POST",
-      idempotencyKey: idempotencyKey("transition", `${caseId}:${version}:${nextStatus}`),
-      body: { next_status: nextStatus, version, reason },
-    });
+    return this.#request(
+      `/api/v1/impact-cases/${encodeURIComponent(caseId)}/transitions`,
+      {
+        method: "POST",
+        idempotencyKey: idempotencyKey(
+          "transition",
+          `${caseId}:${version}:${nextStatus}`,
+        ),
+        body: { next_status: nextStatus, version, reason },
+      },
+    );
   }
 
   async saveResponsePlan({ impactCaseId, ...responsePlan }) {
-    return this.#request(`/api/v1/impact-cases/${encodeURIComponent(impactCaseId)}/response-plan`, {
-      method: "PUT",
-      idempotencyKey: idempotencyKey("response-plan", `${impactCaseId}:${responsePlan.requestId ?? responsePlan.policyVersion}`),
-      body: responsePlan,
-    });
+    return this.#request(
+      `/api/v1/impact-cases/${encodeURIComponent(impactCaseId)}/response-plan`,
+      {
+        method: "PUT",
+        idempotencyKey: idempotencyKey(
+          "response-plan",
+          `${impactCaseId}:${responsePlan.requestId ?? responsePlan.policyVersion}`,
+        ),
+        body: responsePlan,
+      },
+    );
   }
 
-  async registerStatusCheck({ id, caseId, purpose, token, providerAcceptedAt, responseDueAt, tokenExpiresAt, idempotencyKey: key }) {
-    return this.#request(`/api/v1/impact-cases/${encodeURIComponent(caseId)}/status-checks`, {
-      method: "POST",
-      idempotencyKey: idempotencyKey("check", key),
-      body: {
-        id,
-        purpose: purpose === "OUTAGE_STATUS" ? "OUTAGE_CHECK" : "RECOVERY_CHECK",
-        token,
-        requested_at: providerAcceptedAt,
-        provider_accepted_at: providerAcceptedAt,
-        response_due_at: responseDueAt,
-        token_expires_at: tokenExpiresAt,
+  async registerStatusCheck({
+    id,
+    caseId,
+    purpose,
+    token,
+    providerAcceptedAt,
+    responseDueAt,
+    tokenExpiresAt,
+    idempotencyKey: key,
+  }) {
+    return this.#request(
+      `/api/v1/impact-cases/${encodeURIComponent(caseId)}/status-checks`,
+      {
+        method: "POST",
+        idempotencyKey: idempotencyKey("check", key),
+        body: {
+          id,
+          purpose:
+            purpose === "OUTAGE_STATUS" ? "OUTAGE_CHECK" : "RECOVERY_CHECK",
+          token,
+          requested_at: providerAcceptedAt,
+          provider_accepted_at: providerAcceptedAt,
+          response_due_at: responseDueAt,
+          token_expires_at: tokenExpiresAt,
+        },
       },
-    });
+    );
   }
 
   async #request(path, { method, body, idempotencyKey: key }) {
@@ -128,10 +211,18 @@ export class BackendAHttpClient {
     try {
       payload = await response.json();
     } catch {
-      throw new BackendAHttpError("BACKEND_A_INVALID_RESPONSE", response.status, response.status >= 500);
+      throw new BackendAHttpError(
+        "BACKEND_A_INVALID_RESPONSE",
+        response.status,
+        response.status >= 500,
+      );
     }
     if (!response.ok || payload?.error) {
-      throw new BackendAHttpError(payload?.error?.code ?? "BACKEND_A_REQUEST_FAILED", response.status, response.status >= 500 || response.status === 429);
+      throw new BackendAHttpError(
+        payload?.error?.code ?? "BACKEND_A_REQUEST_FAILED",
+        response.status,
+        response.status >= 500 || response.status === 429,
+      );
     }
     return payload.data;
   }

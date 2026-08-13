@@ -31,7 +31,7 @@ def create_outage(body: OutageCreateRequest, identity=Depends(current_identity),
 
 @router.get("/api/v1/outages/{outage_id}")
 def get_outage(outage_id: str, identity=Depends(current_identity), svc=Depends(service)):
-    require_role(identity, UserRole.INSTITUTION_ADMIN)
+    require_any_role(identity, {UserRole.INSTITUTION_ADMIN, UserRole.CORE_ENGINE})
     return success(svc.get(outage_id))
 
 
@@ -61,7 +61,7 @@ def create_case(outage_id: str, body: ImpactCaseCreateRequest, identity=Depends(
 
 @router.get("/api/v1/outages/{outage_id}/impact-cases")
 def list_cases(outage_id: str, identity=Depends(current_identity), svc=Depends(service)):
-    require_role(identity, UserRole.INSTITUTION_ADMIN)
+    require_any_role(identity, {UserRole.INSTITUTION_ADMIN, UserRole.CORE_ENGINE})
     return success(svc.list_cases(outage_id))
 
 

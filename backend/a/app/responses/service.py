@@ -33,8 +33,15 @@ class ResponseService:
             raise ConflictError("IMPACT_CASE_CLOSED", "종료된 대응 건에는 상태 확인을 생성할 수 없습니다.")
         if self.db.get(StatusCheck, body.id) is not None:
             raise ConflictError("STATUS_CHECK_ID_ALREADY_EXISTS", "동일한 상태 확인 ID가 이미 존재합니다.")
-        if body.purpose == StatusCheckPurpose.RECOVERY_CONFIRMATION and case.status != ImpactCaseStatus.RECOVERY_CHECK:
-            raise ConflictError("INVALID_CHECK_PURPOSE", "복구 확인은 RECOVERY_CHECK 상태에서만 생성할 수 있습니다.")
+        if (
+            body.purpose == StatusCheckPurpose.RECOVERY_CONFIRMATION
+            and case.outage.status != OutageStatus.RECOVERY_REPORTED
+            and case.status != ImpactCaseStatus.RECOVERY_CHECK
+        ):
+            raise ConflictError(
+                "INVALID_CHECK_PURPOSE",
+                "지역 복구가 등록된 대응 건에만 복구 확인을 생성할 수 있습니다.",
+            )
         check = StatusCheck(
             id=body.id, impact_case_id=case_id, purpose=body.purpose, token_digest=digest_response_token(body.token),
             requested_at=body.requested_at, provider_accepted_at=body.provider_accepted_at,
@@ -192,7 +199,7 @@ class ResponseService:
         self._commit("RECOVERY_CONFIRMATION_CONFLICT", "복구 확인 저장이 충돌했습니다.")
         return result
 
-    def regional_recovery(self, actor_id: str, outage_id: str, body: RegionalRecoveryRequest) -> dict:
+    def regional_recovery(self, actor_id: str, outage_id: str, body: RegionalRecoveryRequest, actor_role: UserRole = UserRole.INSTITUTION_ADMIN) -> dict:
         outage = self.db.get(OutageEvent, outage_id)
         if outage is None: raise NotFoundError("OUTAGE_NOT_FOUND", "정전을 찾을 수 없습니다.")
         self._version(outage.version, body.version)
@@ -201,8 +208,8 @@ class ResponseService:
         before = outage_view(outage)
         outage.status, outage.recovery_reported_at, outage.recovery_source = OutageStatus.RECOVERY_REPORTED, body.recovered_at, body.source
         outage.version += 1
-        self.db.add(OutageEventHistory(outage_id=outage.id, previous_status=OutageStatus.ACTIVE, next_status=OutageStatus.RECOVERY_REPORTED, actor_id=actor_id, actor_role=UserRole.INSTITUTION_ADMIN, reason=body.reason, occurred_at=body.recovered_at))
-        self._audit("OutageEvent", outage.id, AuditAction.STATE_CHANGED, actor_id, UserRole.INSTITUTION_ADMIN, body.reason, before, outage_view(outage))
+        self.db.add(OutageEventHistory(outage_id=outage.id, previous_status=OutageStatus.ACTIVE, next_status=OutageStatus.RECOVERY_REPORTED, actor_id=actor_id, actor_role=actor_role, reason=body.reason, occurred_at=body.recovered_at))
+        self._audit("OutageEvent", outage.id, AuditAction.STATE_CHANGED, actor_id, actor_role, body.reason, before, outage_view(outage))
         self._commit("OUTAGE_RECOVERY_CONFLICT", "지역 복구 등록이 충돌했습니다.")
         return outage_view(outage) | {"recoveryDecisionPending": True}
 
